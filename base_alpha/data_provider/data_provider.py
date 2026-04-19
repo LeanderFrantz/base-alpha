@@ -19,7 +19,9 @@ class YFProvider(DataProvider):
         :return: A DataFrame containing the historical OHLCV data.
         """
         try:
-            df_ohlcv = yf.download(ticker, start=start_date, end=end_date)
+            df_ohlcv = yf.download(
+                ticker, start=start_date, end=end_date, auto_adjust=True
+            )
 
             if df_ohlcv.empty:
                 print(
