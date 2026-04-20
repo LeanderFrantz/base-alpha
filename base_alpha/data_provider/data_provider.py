@@ -20,7 +20,11 @@ class YFProvider(DataProvider):
         """
         try:
             df_ohlcv = yf.download(
-                ticker, start=start_date, end=end_date, auto_adjust=True
+                ticker,
+                start=start_date,
+                end=end_date,
+                auto_adjust=True,
+                progress=False,
             )
 
             if df_ohlcv.empty:
