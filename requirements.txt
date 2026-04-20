@@ -5,3 +5,7 @@ yfinance
 scikit-learn
 plotly
 hmmlearn
+xgboost
+optuna
+pandas_ta
+torch
