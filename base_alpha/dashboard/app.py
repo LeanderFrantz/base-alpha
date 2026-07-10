@@ -5,6 +5,12 @@ import dash_bootstrap_components as dbc
 from base_alpha.data_provider.data_provider import YFProvider
 from base_alpha.models.regime_detection import RegimeDetector
 from base_alpha.models.forecaster import Forecaster
+from base_alpha.models.heston import (
+    get_heston_fft_calls,
+    get_heston_fft_puts,
+    estimate_heston_parameters,
+)
+from base_alpha.analytics.visualizer import Visualizer
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
@@ -47,7 +53,7 @@ app.layout = dbc.Container(
                                         html.Label("Ticker:"),
                                         dbc.Input(
                                             id="ticker-input",
-                                            value="^GSPC",
+                                            value="AAPL",
                                             type="text",
                                             className="mb-3",
                                         ),
@@ -74,6 +80,31 @@ app.layout = dbc.Container(
                                             step=1,
                                             value=5,
                                             marks={i: str(i) for i in range(5, 31, 5)},
+                                        ),
+                                        html.Label(
+                                            "HMM Volatility Lookback (Days):",
+                                            className="mt-3",
+                                        ),
+                                        dcc.Slider(
+                                            id="vola-slider",
+                                            min=10,
+                                            max=100,
+                                            step=5,
+                                            value=20,
+                                            marks={
+                                                i: str(i) for i in range(10, 101, 20)
+                                            },
+                                        ),
+                                        html.Label("Option Expiry (Days):"),
+                                        dcc.Slider(
+                                            id="expiry-slider",
+                                            min=1,
+                                            max=365,
+                                            step=1,
+                                            value=30,
+                                            marks={
+                                                i: str(i) for i in range(30, 361, 60)
+                                            },
                                         ),
                                     ]
                                 ),
@@ -116,22 +147,6 @@ app.layout = dbc.Container(
                                                 "LSTM_Feature",
                                             ],
                                             className="mb-2",
-                                        ),
-                                    ]
-                                ),
-                                dbc.CardHeader("HMM Settings", className="mt-3"),
-                                dbc.CardBody(
-                                    [
-                                        html.Label("Volatility Lookback (Days):"),
-                                        dcc.Slider(
-                                            id="vola-slider",
-                                            min=10,
-                                            max=100,
-                                            step=5,
-                                            value=20,
-                                            marks={
-                                                i: str(i) for i in range(10, 101, 20)
-                                            },
                                         ),
                                     ]
                                 ),
@@ -281,6 +296,20 @@ app.layout = dbc.Container(
                             ],
                             className="g-0",
                         ),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    dcc.Loading(
+                                        dcc.Graph(
+                                            id="heston-chart",
+                                            style={"height": "40vh"},
+                                        )
+                                    ),
+                                    width=12,
+                                    className="mt-3",
+                                ),
+                            ],
+                        ),
                     ],
                     width=9,
                 ),
@@ -331,20 +360,24 @@ model_cache = {}
     [
         Output("main-chart", "figure"),
         Output("forecast-chart", "figure"),
+        Output("heston-chart", "figure"),
         Output("metric-move", "children"),
         Output("metric-move-label", "children"),
         Output("metric-ticker", "children"),
         Output("metric-regime", "children"),
+        Output("metric-call", "children"),
+        Output("metric-put", "children"),
     ],
     [
         Input("data-store", "data"),
         Input("vola-slider", "value"),
         Input("horizon-slider", "value"),
+        Input("expiry-slider", "value"),
         Input("feature-toggles", "value"),
     ],
     [State("ticker-input", "value")],
 )
-def update_all(json_data, vola_val, horizon_val, selected_features, ticker):
+def update_all(json_data, vola_val, horizon_val, expiry_val, selected_features, ticker):
     if json_data is None:
         raise exceptions.PreventUpdate
 
@@ -356,7 +389,16 @@ def update_all(json_data, vola_val, horizon_val, selected_features, ticker):
     latest_regime_val = int(df_result["Regime"].iloc[-1])
     latest_regime_text = "Low Vol" if latest_regime_val == 0 else "High Vol"
 
-    # 2. Forecaster Prediction
+    # 2. Heston Parameter Estimation
+    provider = YFProvider()
+    atm_iv = provider.get_atm_iv(ticker, expiry_val)
+    print(f"DEBUG: Fetched ATM IV: {atm_iv}")
+    heston_params = estimate_heston_parameters(
+        df_result, market_v0=atm_iv**2, tau=expiry_val / 365
+    )
+
+    # 3. Forecaster Prediction
+
     cache_key = f"{ticker}_{vola_val}_{str(selected_features)}"
     if cache_key not in model_cache:
         forecaster = Forecaster(forecast_horizon=5)
@@ -468,7 +510,7 @@ def update_all(json_data, vola_val, horizon_val, selected_features, ticker):
             x=future_dates,
             y=future_prices,
             name="Forecast",
-            line=dict(color="#00d1b2", width=2, dash="dash"),
+            line=dict(color="#0018d1", width=2, dash="dash"),
         )
     )
     fig_forecast.add_trace(
@@ -476,7 +518,7 @@ def update_all(json_data, vola_val, horizon_val, selected_features, ticker):
             x=future_dates + future_dates[::-1],
             y=upper_band + lower_band[::-1],
             fill="toself",
-            fillcolor="rgba(0, 209, 178, 0.1)",
+            fillcolor="rgba(0, 255, 100, 0.18)",
             line=dict(color="rgba(0,0,0,0)"),
             name="Conf. Band",
         )
@@ -492,13 +534,37 @@ def update_all(json_data, vola_val, horizon_val, selected_features, ticker):
     )
     fig_forecast.update_yaxes(range=[price_min, price_max], side="right", title="Price")
 
+    # Heston Chart
+    S0 = last_price
+    strike_range = np.linspace(S0 * 0.8, S0 * 1.2, 50)
+
+    strikes, call_prices = get_heston_fft_calls(
+        **heston_params, interpolate_strikes=strike_range
+    )
+    _, put_prices = get_heston_fft_puts(
+        **heston_params, interpolate_strikes=strike_range
+    )
+
+    fig_heston = Visualizer.plot_heston_prices(
+        strikes, call_prices, put_prices, S0, expiry_val
+    )
+
+    # Metrics
+    # Find ATM Call/Put price (index where strike is closest to S0)
+    idx_atm = (np.abs(strikes - S0)).argmin()
+    metric_call_text = f"{call_prices[idx_atm]:.2f}"
+    metric_put_text = f"{put_prices[idx_atm]:.2f}"
+
     return (
         fig_main,
         fig_forecast,
+        fig_heston,
         metric_move_text,
         metric_move_label,
         ticker,
         latest_regime_text,
+        metric_call_text,
+        metric_put_text,
     )
 
 

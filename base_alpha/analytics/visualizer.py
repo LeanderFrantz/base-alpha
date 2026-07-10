@@ -89,3 +89,33 @@ class Visualizer:
         fig.update_xaxes(title_text="Date", row=2, col=1)
 
         fig.show()
+
+    @staticmethod
+    def plot_heston_prices(strikes, call_prices, put_prices, current_price, expiry_days):
+        """
+        Creates a line chart for Heston call and put prices with an ATM line.
+
+        :param strikes: Array of strike prices.
+        :param call_prices: Array of call prices.
+        :param put_prices: Array of put prices.
+        :param current_price: The current asset price (ATM).
+        :param expiry_days: Days to expiry.
+        :return: Plotly figure object.
+        """
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=strikes, y=call_prices, name="Call Prices", line=dict(color="#00d1b2")))
+        fig.add_trace(go.Scatter(x=strikes, y=put_prices, name="Put Prices", line=dict(color="#ff5050")))
+        
+        # Add ATM dashed line
+        fig.add_vline(x=current_price, line_dash="dash", line_color="white", annotation_text="ATM")
+        
+        fig.update_layout(
+            title=f"Heston Fair Option Prices ({expiry_days}D)",
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="#1a1a2e",
+            xaxis_title="Strike Price",
+            yaxis_title="Option Price",
+            margin=dict(l=40, r=40, t=40, b=40),
+        )
+        return fig

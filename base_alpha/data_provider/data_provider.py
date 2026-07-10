@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import yfinance as yf
 
@@ -42,3 +43,36 @@ class YFProvider(DataProvider):
         except Exception as e:
             print(f"An error occurred while fetching data for ticker {ticker}: {e}")
             return pd.DataFrame()
+
+    def get_atm_iv(self, ticker: str, target_days: int) -> float:
+        """
+        Fetches ATM Implied Volatility for the expiry closest to target_days.
+        Averages ATM Call and Put IVs.
+        """
+        try:
+            t = yf.Ticker(ticker)
+            expirations = pd.to_datetime(t.options)
+            if expirations.empty:
+                return 0.15
+
+            # Find closest expiration
+            target_date = pd.Timestamp.now() + pd.Timedelta(days=target_days)
+            # Use .values.astype(np.int64) to get nanoseconds for comparison
+            diffs = (expirations - target_date).values
+            closest_exp = expirations[np.abs(diffs).argmin()]
+            exp_str = closest_exp.strftime("%Y-%m-%d")
+
+            chain = t.option_chain(exp_str)
+            spot = t.history(period="1d")["Close"].iloc[-1]
+
+            # ATM Strike (closest to spot)
+            atm_strike = (chain.calls["strike"] - spot).abs().idxmin()
+
+            # Get IVs
+            call_iv = chain.calls.loc[atm_strike, "impliedVolatility"]
+            put_iv = chain.puts.loc[atm_strike, "impliedVolatility"]
+
+            return float((call_iv + put_iv) / 2)
+        except Exception as e:
+            print(f"Error fetching IV: {e}")
+            return 0.15
