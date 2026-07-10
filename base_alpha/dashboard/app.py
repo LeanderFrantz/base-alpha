@@ -502,7 +502,7 @@ def update_all(json_data, vola_val, horizon_val, selected_features, ticker):
     )
 
     fig_forecast.update_layout(
-        title="Price Forecast",
+        title=f"{horizon_val}D Price Forecast",
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="#1a1a2e",
