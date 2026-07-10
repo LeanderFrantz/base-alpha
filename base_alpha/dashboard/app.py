@@ -227,6 +227,7 @@ app.layout = dbc.Container(
                                                 [
                                                     html.Small(
                                                         "FAIR CALL (30D)",
+                                                        id="label-call",
                                                         style={
                                                             "color": "#6c757d",
                                                             "fontSize": "0.75rem",
@@ -246,6 +247,7 @@ app.layout = dbc.Container(
                                                 [
                                                     html.Small(
                                                         "FAIR PUT (30D)",
+                                                        id="label-put",
                                                         style={
                                                             "color": "#6c757d",
                                                             "fontSize": "0.75rem",
@@ -367,6 +369,8 @@ model_cache = {}
         Output("metric-regime", "children"),
         Output("metric-call", "children"),
         Output("metric-put", "children"),
+        Output("label-call", "children"),
+        Output("label-put", "children"),
     ],
     [
         Input("data-store", "data"),
@@ -565,6 +569,8 @@ def update_all(json_data, vola_val, horizon_val, expiry_val, selected_features, 
         latest_regime_text,
         metric_call_text,
         metric_put_text,
+        f"FAIR CALL ({expiry_val}D)",
+        f"FAIR PUT ({expiry_val}D)",
     )
 
 
