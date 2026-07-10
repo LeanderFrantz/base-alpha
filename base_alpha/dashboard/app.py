@@ -9,20 +9,20 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
-import io
 from datetime import datetime, timedelta
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
 
 # Default dates: Today - 5 years to Today
-end_date = datetime.now()
+end_date = datetime.now() + timedelta(
+    days=1
+)  # Adjusted to ensure we have data for today
 start_date = end_date - timedelta(days=5 * 365)
 
 app.layout = dbc.Container(
     [
-        # Speicher für die Daten (JSON-Format)
+        # data stores for caching
         dcc.Store(id="data-store"),
-        dcc.Store(id="forecaster-store"),
         dbc.Row(
             [
                 dbc.Col(
@@ -303,7 +303,7 @@ def toggle_all_features(all_selected, options):
     return []
 
 
-# CALLBACK 1: Nur Daten laden
+# CALLBACK: Fetch Data (Cached)
 @app.callback(
     Output("data-store", "data"),
     Input("fetch-btn", "n_clicks"),
@@ -314,31 +314,12 @@ def toggle_all_features(all_selected, options):
     ],
 )
 def fetch_data(n_clicks, ticker, start, end):
+
     print(f"DEBUG: Fetching data for {ticker}...")
     provider = YFProvider()
     df = provider.fetch_data(ticker, start, end)
-    # DataFrame als JSON für den Store umwandeln
+    # to JSON for storage in dcc.Store
     return df.to_json(date_format="iso", orient="split")
-
-
-# CALLBACK: Train Forecaster (Cached)
-@app.callback(
-    Output("forecaster-store", "data"),
-    [Input("data-store", "data"), Input("feature-toggles", "value")],
-)
-def train_forecaster_callback(json_data, selected_features):
-    if json_data is None:
-        raise exceptions.PreventUpdate
-
-    # Simple training flow (re-trains on feature toggles)
-    # In a real app, you might want to cache this more intelligently
-    df_ohlcv = pd.read_json(io.StringIO(json_data), orient="split")
-    # For now, train on full data without regime window to avoid dependency on regime slider
-    # (or you need to feed regime detector output here as well)
-
-    # For demo: instantiate and train
-    # Note: Training is still expensive. This makes feature toggling slow but chart updates fast.
-    return "trained"  # Dummy for now, we need a better way to serialize/cache the model
 
 
 # Global cache for the forecaster model
