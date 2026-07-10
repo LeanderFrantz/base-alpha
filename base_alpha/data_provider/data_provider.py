@@ -66,11 +66,12 @@ class YFProvider(DataProvider):
             spot = t.history(period="1d")["Close"].iloc[-1]
 
             # ATM Strike (closest to spot)
-            atm_strike = (chain.calls["strike"] - spot).abs().idxmin()
+            atm_strike_call = (chain.calls["strike"] - spot).abs().idxmin()
+            atm_strike_put = (chain.puts["strike"] - spot).abs().idxmin()
 
             # Get IVs
-            call_iv = chain.calls.loc[atm_strike, "impliedVolatility"]
-            put_iv = chain.puts.loc[atm_strike, "impliedVolatility"]
+            call_iv = chain.calls.loc[atm_strike_call, "impliedVolatility"]
+            put_iv = chain.puts.loc[atm_strike_put, "impliedVolatility"]
 
             return float((call_iv + put_iv) / 2)
         except Exception as e:

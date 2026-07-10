@@ -240,7 +240,7 @@ app.layout = dbc.Container(
                                                     ),
                                                 ]
                                             ),
-                                            width=3,
+                                            width=2,
                                         ),
                                         dbc.Col(
                                             html.Div(
@@ -260,7 +260,27 @@ app.layout = dbc.Container(
                                                     ),
                                                 ]
                                             ),
-                                            width=3,
+                                            width=2,
+                                        ),
+                                        dbc.Col(
+                                            html.Div(
+                                                [
+                                                    html.Small(
+                                                        "IMPLIED VOLA (30D)",
+                                                        id="label-iv",
+                                                        style={
+                                                            "color": "#6c757d",
+                                                            "fontSize": "0.75rem",
+                                                        },
+                                                    ),
+                                                    html.H5(
+                                                        id="metric-iv",
+                                                        children="-",
+                                                        style={"color": "#00d1b2"},
+                                                    ),
+                                                ]
+                                            ),
+                                            width=2,
                                         ),
                                     ],
                                     className="text-center",
@@ -369,8 +389,10 @@ model_cache = {}
         Output("metric-regime", "children"),
         Output("metric-call", "children"),
         Output("metric-put", "children"),
+        Output("metric-iv", "children"),
         Output("label-call", "children"),
         Output("label-put", "children"),
+        Output("label-iv", "children"),
     ],
     [
         Input("data-store", "data"),
@@ -569,8 +591,10 @@ def update_all(json_data, vola_val, horizon_val, expiry_val, selected_features, 
         latest_regime_text,
         metric_call_text,
         metric_put_text,
+        f"{atm_iv:.2%}",
         f"FAIR CALL ({expiry_val}D)",
         f"FAIR PUT ({expiry_val}D)",
+        f"IMPLIED VOLA ({expiry_val}D)",
     )
 
 
