@@ -126,7 +126,7 @@ class Forecaster:
             y.append(target[i + self.lookback_window])
         return np.array(X), np.array(y)
 
-    def _train_lstm(self, df: pd.DataFrame, epochs: int = 20):
+    def _train_lstm(self, df: pd.DataFrame, epochs: int = 20) -> None:
         """
         Level 0: Train LSTM to predict the target.
 
