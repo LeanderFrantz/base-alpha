@@ -20,11 +20,40 @@ The web-based dashboard provides a real-time interface for market monitoring and
 
 ---
 
-## Installation
+## Installation & Environment Setup
+
+This project requires Python 3.12 and the native OpenMP library for `xgboost` support.
+
+### Option A: Using Conda (Recommended)
+
+Conda automatically handles both the Python packages and the native system libraries (especially on macOS).
 
 ```bash
+# Clone the repository
+git clone https://github.com/LeanderFrantz/base-alpha.git
+cd base-alpha
+
+# Create and activate the environment
+conda env create -f environment.yml
+conda activate base-alpha
+
+# Start the dashboard
+python -m base_alpha.dashboard.app
+```
+
+### Option B: Using Pip
+
+If you prefer to install packages using `pip`, you must ensure that the native OpenMP library is installed on your system (especially on macOS):
+
+```bash
+# macOS users: Install OpenMP runtime via Homebrew
+brew install libomp
+
+# Clone and setup
 git clone https://github.com/LeanderFrantz/base-alpha.git
 cd base-alpha
 pip install -r requirements.txt
-python base_alpha/dashboard/app.py
+
+# Start the dashboard
+python -m base_alpha.dashboard.app
 ```
