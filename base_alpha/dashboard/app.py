@@ -427,8 +427,10 @@ def update_all(json_data, vola_val, horizon_val, expiry_val, selected_features, 
     )
 
     # 3. Forecaster Prediction
-
-    cache_key = f"{ticker}_{vola_val}_{str(selected_features)}"
+    # Create a stable identifier for the dataset
+    data_id = f"{len(df_ohlcv)}_{df_ohlcv.index[0]}_{df_ohlcv.index[-1]}"
+    cache_key = f"{ticker}_{vola_val}_{str(selected_features)}_{data_id}"
+    
     if cache_key not in model_cache:
         forecaster = Forecaster(forecast_horizon=5)
         mandatory_features = ["Regime", "Prob_LowVola", "Prob_HighVola"]
