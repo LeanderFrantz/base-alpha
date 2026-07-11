@@ -23,4 +23,4 @@ torch>=2.0.0,<3.0.0
 xgboost>=2.0.0,<3.0.0
 
 # Technical Analysis & Utilities
-pandas-ta
+pandas-ta>=0.4.67b0,<0.5.0
