@@ -601,4 +601,5 @@ def update_all(json_data, vola_val, horizon_val, expiry_val, selected_features, 
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8050, debug=True)
+    debug_mode = os.environ.get("DASH_DEBUG", "false").lower() == "true"
+    app.run(host="127.0.0.1", port=8050, debug=debug_mode)
