@@ -173,7 +173,7 @@ class Forecaster:
         scaled_features = self.scaler.transform(raw_features)
 
         # We need a rolling window for every point
-        lstm_preds = np.zeros(len(df))
+        lstm_preds = np.full(len(df), np.nan)
         self.lstm_model.eval()
 
         with torch.no_grad():
