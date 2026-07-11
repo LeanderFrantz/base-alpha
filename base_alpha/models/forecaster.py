@@ -95,7 +95,9 @@ class Forecaster:
 
         macd_df = ta.macd(df["Close"], fast=12, slow=26, signal=9)
         if macd_df is not None:
-            df["MACD_12_26_9"] = macd_df["MACD_12_26_9"]
+            df["MACD_12_26_9"] = macd_df["MACD_12_26_9"].fillna(0.0)
+        else:
+            df["MACD_12_26_9"] = 0.0
 
         sma_200 = ta.sma(df["Close"], length=200)
         df["dist_sma_200"] = (df["Close"] - sma_200) / sma_200
