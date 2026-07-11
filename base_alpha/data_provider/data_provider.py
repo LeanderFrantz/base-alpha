@@ -43,7 +43,6 @@ class YFProvider(DataProvider):
         except Exception as e:
             print(f"An error occurred while fetching data for ticker {ticker}: {e}")
             return pd.DataFrame()
-
     def get_atm_iv(self, ticker: str, target_days: int) -> float:
         """
         Fetches ATM Implied Volatility for the expiry closest to target_days.
@@ -72,6 +71,9 @@ class YFProvider(DataProvider):
             # Get IVs
             call_iv = chain.calls.loc[atm_strike_call, "impliedVolatility"]
             put_iv = chain.puts.loc[atm_strike_put, "impliedVolatility"]
+
+            if pd.isna(call_iv) or pd.isna(put_iv):
+                return 0.15
 
             return float((call_iv + put_iv) / 2)
         except Exception as e:
