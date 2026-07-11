@@ -422,7 +422,7 @@ def update_all(json_data, vola_val, horizon_val, expiry_val, selected_features, 
     latest_regime_text = "Low Vol" if latest_regime_val == 0 else "High Vol"
 
     # 2. Heston Parameter Estimation
-    heston_key = f"{ticker}_{expiry_val}_{hash(tuple(df_result['Regime']))}"
+    heston_key = f"{ticker}_{expiry_val}"
     if heston_key not in heston_cache:
         provider = YFProvider()
         atm_iv = provider.get_atm_iv(ticker, expiry_val)
