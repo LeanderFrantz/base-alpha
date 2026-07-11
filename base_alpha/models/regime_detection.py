@@ -82,5 +82,6 @@ class RegimeDetector:
         df_res["Regime"] = regimes
         df_res["Prob_LowVola"] = probabilities[:, 0]
         df_res["Prob_HighVola"] = probabilities[:, 1]
+        df_res["volatility"] = df_features["volatility"]
 
         return df_res
