@@ -369,6 +369,8 @@ def fetch_data(n_clicks, ticker, start, end):
     print(f"DEBUG: Fetching data for {ticker}...")
     provider = YFProvider()
     df = provider.fetch_data(ticker, start, end)
+    if df.empty:
+        raise exceptions.PreventUpdate
     # to JSON for storage in dcc.Store
     return df.to_json(date_format="iso", orient="split")
 
