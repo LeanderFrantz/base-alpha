@@ -379,6 +379,9 @@ def fetch_data(n_clicks, ticker, start, end):
 # Global cache for the forecaster model
 model_cache = {}
 
+# Global cache for Heston parameters
+heston_cache = {}
+
 
 # CALLBACK: Main & Forecast Charts (Synchronized)
 @app.callback(
@@ -419,12 +422,18 @@ def update_all(json_data, vola_val, horizon_val, expiry_val, selected_features, 
     latest_regime_text = "Low Vol" if latest_regime_val == 0 else "High Vol"
 
     # 2. Heston Parameter Estimation
-    provider = YFProvider()
-    atm_iv = provider.get_atm_iv(ticker, expiry_val)
-    print(f"DEBUG: Fetched ATM IV: {atm_iv}")
-    heston_params = estimate_heston_parameters(
-        df_result, market_v0=atm_iv**2, tau=expiry_val / 365
-    )
+    heston_key = f"{ticker}_{expiry_val}_{hash(tuple(df_result['Regime']))}"
+    if heston_key not in heston_cache:
+        provider = YFProvider()
+        atm_iv = provider.get_atm_iv(ticker, expiry_val)
+        print(f"DEBUG: Fetched ATM IV for {ticker}: {atm_iv}")
+        heston_params = estimate_heston_parameters(
+            df_result, market_v0=atm_iv**2, tau=expiry_val / 365
+        )
+        heston_cache[heston_key] = (atm_iv, heston_params)
+    else:
+        atm_iv, heston_params = heston_cache[heston_key]
+        print(f"DEBUG: Using cached Heston parameters for {heston_key}")
 
     # 3. Forecaster Prediction
     # Create a stable identifier for the dataset
