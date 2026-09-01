@@ -280,7 +280,7 @@ app.layout = dbc.Container(
                                             html.Div(
                                                 [
                                                     html.Small(
-                                                        "FAIR CALL (30D)",
+                                                        "FAIR ATM CALL (30D)",
                                                         id="label-call",
                                                         style={
                                                             "color": "#6c757d",
@@ -300,7 +300,7 @@ app.layout = dbc.Container(
                                             html.Div(
                                                 [
                                                     html.Small(
-                                                        "FAIR PUT (30D)",
+                                                        "FAIR ATM PUT (30D)",
                                                         id="label-put",
                                                         style={
                                                             "color": "#6c757d",
@@ -899,8 +899,8 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
         f"{call_prices[idx_atm]:.2f}",
         f"{put_prices[idx_atm]:.2f}",
         f"{pricing_vola:.2%}",
-        f"FAIR CALL ({expiry_val}D)",
-        f"FAIR PUT ({expiry_val}D)",
+        f"FAIR ATM CALL ({expiry_val}D)",
+        f"FAIR ATM PUT ({expiry_val}D)",
         vola_label,
         vola_value_style,
         vola_label_style,

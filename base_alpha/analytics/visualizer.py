@@ -298,7 +298,17 @@ class Visualizer:
         x_range = [df_result["Close"].tail(lookback_days).index[0], x_end]
 
         fig.update_layout(
-            title=f"{ticker} | Price, HMM Regime & Forecast",
+            # The view buttons and the legend share a strip just above the plot
+            # area, so the title is pinned to the top of the container instead of
+            # being centred in the top margin, where it collided with them.
+            title=dict(
+                text=f"{ticker} | Price, HMM Regime & Forecast",
+                x=0,
+                xanchor="left",
+                y=0.97,
+                yanchor="top",
+                yref="container",
+            ),
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="#1a1a2e",
@@ -314,7 +324,7 @@ class Visualizer:
             legend=dict(
                 orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
             ),
-            margin=dict(l=40, r=40, t=90, b=40),
+            margin=dict(l=40, r=40, t=120, b=40),
         )
         # Plotly's own range selector always counts back from the right edge of the
         # axis, which is the end of the forecast - "1M" would then buy its month
