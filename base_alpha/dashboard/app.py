@@ -53,6 +53,12 @@ MAX_CACHE_ENTRIES = 8
 METRIC_COLOR = "#00d1b2"
 LABEL_COLOR = "#6c757d"
 FALLBACK_COLOR = "#f0ad4e"
+UP_COLOR = "#2ecc71"
+DOWN_COLOR = "#ff5050"
+
+# Calendar days the data may lag before it is flagged as stale. A weekend plus a
+# public holiday accounts for four.
+STALE_AFTER_DAYS = 4
 
 # Shortest history the feature pipeline can produce a complete row from.
 MIN_HISTORY = SMA_WINDOW + TRAIN_HORIZON
@@ -62,6 +68,36 @@ end_date = datetime.now() + timedelta(
     days=1
 )  # Adjusted to ensure we have data for today
 start_date = end_date - timedelta(days=5 * 365)
+
+def _metric_col(
+    label_text: str,
+    value_id: str,
+    label_id: str | None = None,
+    detail_id: str | None = None,
+) -> dbc.Col:
+    """
+    One tile of the metrics header: a grey caption, the value, and an optional
+    smaller detail line beneath it.
+
+    :param label_text: Caption shown initially.
+    :param value_id: Component id of the value.
+    :param label_id: Component id of the caption, when a callback rewrites it.
+    :param detail_id: Component id of the detail line, when the tile has one.
+    :return: An auto-width column, so the row divides evenly however many there are.
+    """
+    caption = html.Small(
+        label_text, style={"color": LABEL_COLOR, "fontSize": "0.75rem"}
+    )
+    if label_id:
+        caption.id = label_id
+
+    children = [caption, html.H5(id=value_id, children="-", style={"color": METRIC_COLOR})]
+    if detail_id:
+        children.append(
+            html.Small(id=detail_id, children="", style={"fontSize": "0.7rem"})
+        )
+    return dbc.Col(html.Div(children), width=True)
+
 
 app.layout = dbc.Container(
     [
@@ -218,123 +254,41 @@ app.layout = dbc.Container(
                             dbc.CardBody(
                                 dbc.Row(
                                     [
-                                        dbc.Col(
-                                            html.Div(
-                                                [
-                                                    html.Small(
-                                                        "ACTIVE TICKER",
-                                                        style={
-                                                            "color": "#6c757d",
-                                                            "fontSize": "0.75rem",
-                                                        },
-                                                    ),
-                                                    html.H5(
-                                                        id="metric-ticker",
-                                                        children="-",
-                                                        style={"color": "#00d1b2"},
-                                                    ),
-                                                ]
-                                            ),
-                                            width=2,
+                                        _metric_col(
+                                            "ACTIVE TICKER",
+                                            "metric-ticker",
+                                            detail_id="metric-asof",
                                         ),
-                                        dbc.Col(
-                                            html.Div(
-                                                [
-                                                    html.Small(
-                                                        id="metric-move-label",
-                                                        children="EXP. MOVE",
-                                                        style={
-                                                            "color": "#6c757d",
-                                                            "fontSize": "0.75rem",
-                                                        },
-                                                    ),
-                                                    html.H5(
-                                                        id="metric-move",
-                                                        children="-",
-                                                        style={"color": "#00d1b2"},
-                                                    ),
-                                                ]
-                                            ),
-                                            width=2,
+                                        _metric_col(
+                                            "LAST PRICE",
+                                            "metric-price",
+                                            detail_id="metric-change",
                                         ),
-                                        dbc.Col(
-                                            html.Div(
-                                                [
-                                                    html.Small(
-                                                        "CURRENT REGIME",
-                                                        style={
-                                                            "color": "#6c757d",
-                                                            "fontSize": "0.75rem",
-                                                        },
-                                                    ),
-                                                    html.H5(
-                                                        id="metric-regime",
-                                                        children="-",
-                                                        style={"color": "#00d1b2"},
-                                                    ),
-                                                ]
-                                            ),
-                                            width=2,
+                                        _metric_col(
+                                            "EXP. MOVE",
+                                            "metric-move",
+                                            label_id="metric-move-label",
+                                            detail_id="metric-move-band",
                                         ),
-                                        dbc.Col(
-                                            html.Div(
-                                                [
-                                                    html.Small(
-                                                        "FAIR ATM CALL (30D)",
-                                                        id="label-call",
-                                                        style={
-                                                            "color": "#6c757d",
-                                                            "fontSize": "0.75rem",
-                                                        },
-                                                    ),
-                                                    html.H5(
-                                                        id="metric-call",
-                                                        children="-",
-                                                        style={"color": "#00d1b2"},
-                                                    ),
-                                                ]
-                                            ),
-                                            width=2,
+                                        _metric_col(
+                                            "CURRENT REGIME",
+                                            "metric-regime",
+                                            detail_id="metric-regime-detail",
                                         ),
-                                        dbc.Col(
-                                            html.Div(
-                                                [
-                                                    html.Small(
-                                                        "FAIR ATM PUT (30D)",
-                                                        id="label-put",
-                                                        style={
-                                                            "color": "#6c757d",
-                                                            "fontSize": "0.75rem",
-                                                        },
-                                                    ),
-                                                    html.H5(
-                                                        id="metric-put",
-                                                        children="-",
-                                                        style={"color": "#00d1b2"},
-                                                    ),
-                                                ]
-                                            ),
-                                            width=2,
+                                        _metric_col(
+                                            "FAIR ATM CALL (30D)",
+                                            "metric-call",
+                                            label_id="label-call",
                                         ),
-                                        dbc.Col(
-                                            html.Div(
-                                                [
-                                                    html.Small(
-                                                        "IMPLIED VOLA (30D)",
-                                                        id="label-iv",
-                                                        style={
-                                                            "color": "#6c757d",
-                                                            "fontSize": "0.75rem",
-                                                        },
-                                                    ),
-                                                    html.H5(
-                                                        id="metric-iv",
-                                                        children="-",
-                                                        style={"color": "#00d1b2"},
-                                                    ),
-                                                ]
-                                            ),
-                                            width=2,
+                                        _metric_col(
+                                            "FAIR ATM PUT (30D)",
+                                            "metric-put",
+                                            label_id="label-put",
+                                        ),
+                                        _metric_col(
+                                            "IMPLIED VOLA (30D)",
+                                            "metric-iv",
+                                            label_id="label-iv",
                                         ),
                                     ],
                                     className="text-center",
@@ -575,13 +529,13 @@ def _cache_store(cache: dict, key: str, value) -> None:
         cache.pop(next(iter(cache)))
 
 
-def _get_regimes(json_data: str, vola_val: int) -> tuple[pd.DataFrame, str]:
+def _get_regimes(json_data: str, vola_val: int) -> tuple[pd.DataFrame, str, dict]:
     """
     Runs regime detection on the stored data, memoized on payload and window.
 
     :param json_data: Serialized OHLCV DataFrame from the data store.
     :param vola_val: HMM volatility lookback window in trading days.
-    :return: Tuple of (DataFrame with regimes, stable dataset identifier).
+    :return: Tuple of (DataFrame with regimes, dataset identifier, regime summary).
     """
     cache_key = f"{hash(json_data)}_{vola_val}"
     if cache_key in regime_cache:
@@ -597,8 +551,10 @@ def _get_regimes(json_data: str, vola_val: int) -> tuple[pd.DataFrame, str]:
     detector = RegimeDetector(n_regimes=2, vola_window=vola_val)
     df_result = detector.fit_predict(df_ohlcv)
     data_id = f"{len(df_ohlcv)}_{df_ohlcv.index[0]}_{df_ohlcv.index[-1]}"
-    _cache_store(regime_cache, cache_key, (df_result, data_id))
-    return df_result, data_id
+    # computed while the fitted detector is still around; transmat_ is otherwise lost
+    summary = detector.regime_summary(df_result)
+    _cache_store(regime_cache, cache_key, (df_result, data_id, summary))
+    return df_result, data_id, summary
 
 
 def _get_forecaster(
@@ -672,8 +628,15 @@ def _get_heston(
         Output("main-chart", "figure"),
         Output("metric-move", "children"),
         Output("metric-move-label", "children"),
+        Output("metric-move-band", "children"),
         Output("metric-ticker", "children"),
+        Output("metric-asof", "children"),
+        Output("metric-asof", "style"),
+        Output("metric-price", "children"),
+        Output("metric-change", "children"),
+        Output("metric-change", "style"),
         Output("metric-regime", "children"),
+        Output("metric-regime-detail", "children"),
         Output("status-alert", "children", allow_duplicate=True),
         Output("status-alert", "color", allow_duplicate=True),
         Output("status-alert", "is_open", allow_duplicate=True),
@@ -701,7 +664,12 @@ def update_price_panel(
         # A too short date range (the indicators need ~200 rows) must not leave the
         # user staring at a stale chart with no explanation.
         print(f"ERROR: price panel update failed: {exc}")
-        return (*(dash.no_update,) * 5, f"Could not update the charts: {exc}", "danger", True)
+        return (
+            *(dash.no_update,) * 12,
+            f"Could not update the charts: {exc}",
+            "danger",
+            True,
+        )
 
 
 def _build_price_panel(
@@ -718,10 +686,8 @@ def _build_price_panel(
     :param ticker: Active ticker symbol.
     :return: Tuple matching the callback's output list.
     """
-    df_result, data_id = _get_regimes(json_data, vola_val)
-    latest_regime_text = (
-        "Low Vol" if int(df_result["Regime"].iloc[-1]) == 0 else "High Vol"
-    )
+    df_result, data_id, summary = _get_regimes(json_data, vola_val)
+    latest_regime_text = "Low Vol" if summary["current"] == 0 else "High Vol"
 
     forecaster = _get_forecaster(
         df_result, ticker, vola_val, selected_features, data_id
@@ -763,6 +729,37 @@ def _build_price_panel(
     # Calculate Move for the selected horizon
     expected_pct_change = (np.exp(daily_log_return * horizon_val) - 1) * 100
 
+    # The point estimate alone says nothing about how wide the outcome is, so report
+    # the same outer band the chart draws, as a range around today's price.
+    outer_level, outer_low, outer_high = max(bands, key=lambda band: band[0])
+    band_text = (
+        f"{(outer_low[-1] / last_price - 1) * 100:+.1f}% … "
+        f"{(outer_high[-1] / last_price - 1) * 100:+.1f}% @ {outer_level:g}%"
+    )
+
+    day_change = (last_price / float(df_result["Close"].iloc[-2]) - 1) * 100
+    change_style = {
+        "fontSize": "0.7rem",
+        "color": UP_COLOR if day_change >= 0 else DOWN_COLOR,
+    }
+
+    # How old the data is. The chart marks the last bar, so saying nothing here would
+    # let a three day old series read as today.
+    age_days = (pd.Timestamp.now().normalize() - last_date.normalize()).days
+    stale = age_days > STALE_AFTER_DAYS
+    asof_text = f"as of {last_date.date()}" + (f" · {age_days}d old" if stale else "")
+    asof_style = {
+        "fontSize": "0.7rem",
+        "color": FALLBACK_COLOR if stale else LABEL_COLOR,
+    }
+
+    current = summary["current"]
+    regime_detail = (
+        f"{summary['run_length']}d in · typ. "
+        f"{summary['expected_durations'][current]:.0f}d · "
+        f"{summary['annualised_vols'][current]:.0%} vol"
+    )
+
     fig_main = Visualizer.plot_price_forecast(
         df_result,
         ticker,
@@ -776,8 +773,15 @@ def _build_price_panel(
         fig_main,
         f"{expected_pct_change:.2f}%",
         f"EXP. {horizon_val}D MOVE",
+        band_text,
         ticker,
+        asof_text,
+        asof_style,
+        f"{last_price:,.2f}",
+        f"{day_change:+.2f}% d/d",
+        change_style,
         latest_regime_text,
+        regime_detail,
         "",
         "danger",
         False,
@@ -835,7 +839,7 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
     :param ticker: Active ticker symbol.
     :return: Tuple matching the callback's output list.
     """
-    df_result, data_id = _get_regimes(json_data, vola_val)
+    df_result, data_id, _ = _get_regimes(json_data, vola_val)
 
     # Without a listed expiry there is nothing to read an implied volatility from,
     # so price a default tenor off realized volatility rather than leave the panel

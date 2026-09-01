@@ -275,7 +275,7 @@ class Visualizer:
             line_dash="dot",
             line_color="#6c757d",
             line_width=1,
-            annotation_text="TODAY",
+            annotation_text=last_date.strftime("%Y-%m-%d"),
             annotation_position="top left",
             annotation_font=dict(color="#6c757d", size=10),
             row=1,
