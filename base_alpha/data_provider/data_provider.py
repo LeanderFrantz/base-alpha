@@ -65,6 +65,35 @@ class YFProvider(DataProvider):
             print(f"Error listing expirations for {ticker}: {e}")
             return []
 
+    def get_quoted_prices(self, ticker: str, expiry: str) -> dict:
+        """
+        Mid prices of the contracts that carry a two-sided quote for one expiry.
+
+        Only bid and ask count: lastPrice can be days old, and a stale trade plotted
+        against a live model curve would look like a mispricing that is not there.
+        Outside US trading hours the chain is unquoted and this returns nothing.
+
+        :param ticker: The ticker symbol.
+        :param expiry: A listed expiry date as 'YYYY-MM-DD'.
+        :return: {"calls": (strikes, mids), "puts": (strikes, mids)}, sides without
+            quotes omitted, empty dict when the chain cannot be read.
+        """
+        try:
+            chain = yf.Ticker(ticker).option_chain(expiry)
+        except Exception as e:
+            print(f"Error reading the {expiry} chain for {ticker}: {e}")
+            return {}
+
+        quoted = {}
+        for side, frame in (("calls", chain.calls), ("puts", chain.puts)):
+            rows = frame[(frame["bid"] > 0) & (frame["ask"] > 0)]
+            if not rows.empty:
+                quoted[side] = (
+                    rows["strike"].to_numpy(dtype=float),
+                    ((rows["bid"] + rows["ask"]) / 2).to_numpy(dtype=float),
+                )
+        return quoted
+
     def get_atm_iv(self, ticker: str, expiry: str) -> float | None:
         """
         Fetches ATM Implied Volatility for one listed expiry.

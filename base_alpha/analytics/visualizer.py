@@ -92,7 +92,9 @@ class Visualizer:
         fig.show()
 
     @staticmethod
-    def plot_heston_prices(strikes, call_prices, put_prices, current_price, expiry_days):
+    def plot_heston_prices(
+        strikes, call_prices, put_prices, current_price, expiry_days, market=None
+    ):
         """
         Creates a line chart for Heston call and put prices with an ATM line.
 
@@ -101,17 +103,48 @@ class Visualizer:
         :param put_prices: Array of put prices.
         :param current_price: The current asset price (ATM).
         :param expiry_days: Days to expiry.
+        :param market: Optional {"calls": (strikes, mids), "puts": (strikes, mids)}
+            of quoted mid prices, drawn as markers so the gap to the model curve is
+            visible. Omitted sides and an empty dict simply draw nothing.
         :return: Plotly figure object.
         """
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=strikes, y=call_prices, name="Call Prices", line=dict(color="#00d1b2")))
         fig.add_trace(go.Scatter(x=strikes, y=put_prices, name="Put Prices", line=dict(color="#ff5050")))
         
+        # Quoted mids on top of the model curve; the distance between them is the
+        # whole point of the panel.
+        for side, colour, label in (
+            ("calls", "#00d1b2", "Market Call"),
+            ("puts", "#ff5050", "Market Put"),
+        ):
+            if not market or side not in market:
+                continue
+            market_strikes, market_mids = market[side]
+            inside = (market_strikes >= min(strikes)) & (market_strikes <= max(strikes))
+            if not inside.any():
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=market_strikes[inside],
+                    y=market_mids[inside],
+                    mode="markers",
+                    name=label,
+                    marker=dict(
+                        color=colour, size=7, symbol="circle-open", line=dict(width=2)
+                    ),
+                )
+            )
+
         # Add ATM dashed line
         fig.add_vline(x=current_price, line_dash="dash", line_color="white", annotation_text="ATM")
-        
+
+        title = f"Heston Fair Option Prices ({expiry_days}D)"
+        if not market:
+            title += " - no market quotes"
+
         fig.update_layout(
-            title=f"Heston Fair Option Prices ({expiry_days}D)",
+            title=title,
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="#1a1a2e",

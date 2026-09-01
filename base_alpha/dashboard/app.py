@@ -54,6 +54,11 @@ METRIC_COLOR = "#00d1b2"
 LABEL_COLOR = "#6c757d"
 FALLBACK_COLOR = "#f0ad4e"
 UP_COLOR = "#2ecc71"
+
+# Header type scale. The detail line carries data, so it is not smaller than the
+# caption above it.
+CAPTION_SIZE = "0.8rem"
+DETAIL_SIZE = "0.85rem"
 DOWN_COLOR = "#ff5050"
 
 # Calendar days the data may lag before it is flagged as stale. A weekend plus a
@@ -86,7 +91,7 @@ def _metric_col(
     :return: An auto-width column, so the row divides evenly however many there are.
     """
     caption = html.Small(
-        label_text, style={"color": LABEL_COLOR, "fontSize": "0.75rem"}
+        label_text, style={"color": LABEL_COLOR, "fontSize": CAPTION_SIZE}
     )
     if label_id:
         caption.id = label_id
@@ -94,7 +99,7 @@ def _metric_col(
     children = [caption, html.H5(id=value_id, children="-", style={"color": METRIC_COLOR})]
     if detail_id:
         children.append(
-            html.Small(id=detail_id, children="", style={"fontSize": "0.7rem"})
+            html.Small(id=detail_id, children="", style={"fontSize": DETAIL_SIZE})
         )
     return dbc.Col(html.Div(children), width=True)
 
@@ -144,6 +149,8 @@ app.layout = dbc.Container(
                                             id="ticker-input",
                                             value="AAPL",
                                             type="text",
+                                            # Enter submits, same as the button
+                                            n_submit=0,
                                             className="mb-3",
                                         ),
                                         html.Label("Date Range:"),
@@ -451,14 +458,14 @@ def toggle_all_features(all_selected, options):
         Output("status-alert", "color"),
         Output("status-alert", "is_open"),
     ],
-    Input("fetch-btn", "n_clicks"),
+    [Input("fetch-btn", "n_clicks"), Input("ticker-input", "n_submit")],
     [
         State("ticker-input", "value"),
         State("date-picker", "start_date"),
         State("date-picker", "end_date"),
     ],
 )
-def fetch_data(n_clicks, ticker, start, end):
+def fetch_data(n_clicks, n_submit, ticker, start, end):
 
     print(f"DEBUG: Fetching data for {ticker}...")
     provider = YFProvider()
@@ -483,10 +490,10 @@ def fetch_data(n_clicks, ticker, start, end):
         Output("expiry-dropdown", "disabled"),
         Output("expiry-dropdown", "placeholder"),
     ],
-    Input("fetch-btn", "n_clicks"),
+    [Input("fetch-btn", "n_clicks"), Input("ticker-input", "n_submit")],
     State("ticker-input", "value"),
 )
-def load_expirations(n_clicks, ticker):
+def load_expirations(n_clicks, n_submit, ticker):
     expirations = YFProvider().get_expirations(ticker)
     if not expirations:
         return [], NO_EXPIRY, True, "no listed expiries"
@@ -508,6 +515,10 @@ model_cache = {}
 
 # Global cache for Heston parameters
 heston_cache = {}
+
+# Global cache for quoted option prices, so the panel does not refetch the same
+# chain the implied volatility already came from.
+quotes_cache = {}
 
 # Global cache for the HMM fit. Both panels need the same regimes, and they do not
 # depend on horizon, expiry or confidence level, so those must not refit the model.
@@ -739,7 +750,7 @@ def _build_price_panel(
 
     day_change = (last_price / float(df_result["Close"].iloc[-2]) - 1) * 100
     change_style = {
-        "fontSize": "0.7rem",
+        "fontSize": DETAIL_SIZE,
         "color": UP_COLOR if day_change >= 0 else DOWN_COLOR,
     }
 
@@ -749,7 +760,7 @@ def _build_price_panel(
     stale = age_days > STALE_AFTER_DAYS
     asof_text = f"as of {last_date.date()}" + (f" · {age_days}d old" if stale else "")
     asof_style = {
-        "fontSize": "0.7rem",
+        "fontSize": DETAIL_SIZE,
         "color": FALLBACK_COLOR if stale else LABEL_COLOR,
     }
 
@@ -863,8 +874,22 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
     _, put_prices = get_heston_fft_puts(
         **heston_params, interpolate_strikes=strike_range
     )
+    # Quoted mids for the same contract the model just priced, so the panel shows
+    # where the model sits against the market rather than only its own curve.
+    if expiry_date is None:
+        market = {}
+    else:
+        quotes_key = f"{ticker}_{expiry_date}"
+        if quotes_key not in quotes_cache:
+            _cache_store(
+                quotes_cache,
+                quotes_key,
+                YFProvider().get_quoted_prices(ticker, expiry_date),
+            )
+        market = quotes_cache[quotes_key]
+
     fig_heston = Visualizer.plot_heston_prices(
-        strikes, call_prices, put_prices, S0, expiry_val
+        strikes, call_prices, put_prices, S0, expiry_val, market=market
     )
 
     # Find ATM Call/Put price (index where strike is closest to S0)
@@ -879,7 +904,7 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
         # volatility. Amber marks the whole metric as a fallback.
         vola_label = f"REALIZED VOLA ({expiry_val}D)"
         vola_value_style = {"color": FALLBACK_COLOR}
-        vola_label_style = {"color": FALLBACK_COLOR, "fontSize": "0.75rem"}
+        vola_label_style = {"color": FALLBACK_COLOR, "fontSize": CAPTION_SIZE}
         vola_tooltip = (
             f"No usable implied volatility for {ticker}: the option chain carries "
             f"no quotes - normal outside US trading hours - or Yahoo lists no "
@@ -891,7 +916,7 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
     else:
         vola_label = f"IMPLIED VOLA ({expiry_val}D)"
         vola_value_style = {"color": METRIC_COLOR}
-        vola_label_style = {"color": LABEL_COLOR, "fontSize": "0.75rem"}
+        vola_label_style = {"color": LABEL_COLOR, "fontSize": CAPTION_SIZE}
         vola_tooltip = (
             f"At-the-money implied volatility for {ticker}, averaged over the call "
             f"and the put nearest spot on the {expiry_date} chain. It sets v0 for "
