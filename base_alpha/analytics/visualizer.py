@@ -124,12 +124,17 @@ class Visualizer:
             inside = (market_strikes >= min(strikes)) & (market_strikes <= max(strikes))
             if not inside.any():
                 continue
+            order = np.argsort(market_strikes[inside])
             fig.add_trace(
                 go.Scatter(
-                    x=market_strikes[inside],
-                    y=market_mids[inside],
-                    mode="markers",
+                    x=market_strikes[inside][order],
+                    y=market_mids[inside][order],
+                    # The markers stay on top of the line: only the marked strikes
+                    # are real contracts, the segments between them are drawn for
+                    # legibility and are not quotes.
+                    mode="lines+markers",
                     name=label,
+                    line=dict(color=colour, width=1, dash="dot"),
                     marker=dict(
                         color=colour, size=7, symbol="circle-open", line=dict(width=2)
                     ),

@@ -79,6 +79,7 @@ def _metric_col(
     value_id: str,
     label_id: str | None = None,
     detail_id: str | None = None,
+    tooltip: str | None = None,
 ) -> dbc.Col:
     """
     One tile of the metrics header: a grey caption, the value, and an optional
@@ -88,6 +89,8 @@ def _metric_col(
     :param value_id: Component id of the value.
     :param label_id: Component id of the caption, when a callback rewrites it.
     :param detail_id: Component id of the detail line, when the tile has one.
+    :param tooltip: Static hover text explaining the figure. Tiles whose explanation
+        depends on the data carry a Tooltip of their own instead.
     :return: An auto-width column, so the row divides evenly however many there are.
     """
     caption = html.Small(
@@ -101,6 +104,8 @@ def _metric_col(
         children.append(
             html.Small(id=detail_id, children="", style={"fontSize": DETAIL_SIZE})
         )
+    if tooltip:
+        children.append(dbc.Tooltip(tooltip, target=value_id, placement="bottom"))
     return dbc.Col(html.Div(children), width=True)
 
 
@@ -264,32 +269,50 @@ app.layout = dbc.Container(
                                         _metric_col(
                                             "ACTIVE TICKER",
                                             "metric-ticker",
+                                            tooltip=(
+                                                "The symbol currently loaded, and the date of the most recent bar beneath it. Everything on this page is computed from data up to that date, so the figure turns amber once the series falls behind."
+                                            ),
                                             detail_id="metric-asof",
                                         ),
                                         _metric_col(
                                             "LAST PRICE",
                                             "metric-price",
+                                            tooltip=(
+                                                "Close of the most recent bar and its change against the previous close. This is not a live quote: it only moves when you fetch data again."
+                                            ),
                                             detail_id="metric-change",
                                         ),
                                         _metric_col(
                                             "EXP. MOVE",
                                             "metric-move",
+                                            tooltip=(
+                                                "Forecast of the stacked model - an LSTM feeding XGBoost alongside the HMM regime probabilities and technical indicators. It is trained on a fixed 5 trading day horizon and rescaled linearly to the horizon you select, so long horizons are an extrapolation rather than a separate model. The line beneath is the confidence band at that horizon, as a range around the current price."
+                                            ),
                                             label_id="metric-move-label",
                                             detail_id="metric-move-band",
                                         ),
                                         _metric_col(
                                             "CURRENT REGIME",
                                             "metric-regime",
+                                            tooltip=(
+                                                "Hidden Markov state fitted on log returns and rolling volatility. The detail line reads: how long the current state has lasted, the duration expected from the model's transition matrix, and the volatility actually realised in this state, annualised."
+                                            ),
                                             detail_id="metric-regime-detail",
                                         ),
                                         _metric_col(
                                             "FAIR ATM CALL (30D)",
                                             "metric-call",
+                                            tooltip=(
+                                                "Heston price of the call struck nearest spot for the selected expiry, from the FFT pricer. The panel below plots the whole curve against the quoted market prices."
+                                            ),
                                             label_id="label-call",
                                         ),
                                         _metric_col(
                                             "FAIR ATM PUT (30D)",
                                             "metric-put",
+                                            tooltip=(
+                                                "Heston price of the put struck nearest spot for the selected expiry, from the FFT pricer. The panel below plots the whole curve against the quoted market prices."
+                                            ),
                                             label_id="label-put",
                                         ),
                                         _metric_col(
