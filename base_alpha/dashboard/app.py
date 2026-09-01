@@ -37,6 +37,14 @@ INNER_CI_LEVEL = 50
 # Trading days of history shown in the default chart view.
 DEFAULT_LOOKBACK = 120
 
+# Expiry the dropdown preselects, and the tenor priced when a ticker lists no
+# options at all.
+DEFAULT_EXPIRY_DAYS = 30
+
+# Dropdown value meaning "this ticker lists no expiries". Distinct from None,
+# which only means the dropdown has not been filled yet.
+NO_EXPIRY = "__none__"
+
 # Upper bound for the module level caches below.
 MAX_CACHE_ENTRIES = 8
 
@@ -140,16 +148,18 @@ app.layout = dbc.Container(
                                                 i: str(i) for i in range(10, 101, 20)
                                             },
                                         ),
-                                        html.Label("Option Expiry (Days):"),
-                                        dcc.Slider(
-                                            id="expiry-slider",
-                                            min=1,
-                                            max=365,
-                                            step=1,
-                                            value=30,
-                                            marks={
-                                                i: str(i) for i in range(30, 361, 60)
-                                            },
+                                        html.Label(
+                                            "Option Expiry:", className="mt-3"
+                                        ),
+                                        dcc.Dropdown(
+                                            id="expiry-dropdown",
+                                            options=[],
+                                            value=None,
+                                            clearable=False,
+                                            placeholder="Loading expiries...",
+                                            # The CYBORG theme leaves the menu on a
+                                            # light background, so force dark text.
+                                            style={"color": "#000000"},
                                         ),
                                         html.Label(
                                             "Forecast Confidence:", className="mt-3"
@@ -511,6 +521,34 @@ def fetch_data(n_clicks, ticker, start, end):
     return df_ohlcv.to_json(date_format="iso", orient="split"), "", "danger", False
 
 
+# CALLBACK: Fill the expiry dropdown with the dates actually listed for the ticker
+@app.callback(
+    [
+        Output("expiry-dropdown", "options"),
+        Output("expiry-dropdown", "value"),
+        Output("expiry-dropdown", "disabled"),
+        Output("expiry-dropdown", "placeholder"),
+    ],
+    Input("fetch-btn", "n_clicks"),
+    State("ticker-input", "value"),
+)
+def load_expirations(n_clicks, ticker):
+    expirations = YFProvider().get_expirations(ticker)
+    if not expirations:
+        return [], NO_EXPIRY, True, "no listed expiries"
+
+    today = pd.Timestamp.now().normalize()
+    options = [
+        {"label": f"{exp}  ({(pd.Timestamp(exp) - today).days}d)", "value": exp}
+        for exp in expirations
+    ]
+    closest = min(
+        expirations,
+        key=lambda exp: abs((pd.Timestamp(exp) - today).days - DEFAULT_EXPIRY_DAYS),
+    )
+    return options, closest, False, ""
+
+
 # Global cache for the forecaster model
 model_cache = {}
 
@@ -590,27 +628,36 @@ def _get_forecaster(
 
 
 def _get_heston(
-    df_result: pd.DataFrame, ticker: str, expiry_val: int, vola_val: int, data_id: str
+    df_result: pd.DataFrame,
+    ticker: str,
+    expiry_date: str | None,
+    expiry_days: int,
+    vola_val: int,
+    data_id: str,
 ) -> tuple[float | None, dict]:
     """
-    Returns ATM implied volatility and Heston parameters for the given expiry.
+    Returns ATM implied volatility and Heston parameters for one listed expiry.
 
     The parameters are derived from df_result, so the key has to cover every input
     that changes it - ticker and expiry alone would serve stale values after the
     volatility slider or the date range moved.
 
+    :param expiry_date: A listed expiry, or None when the ticker has none.
+    :param expiry_days: Calendar days to that expiry, which sets tau.
     :return: Tuple of (ATM implied volatility or None, Heston parameter dict).
     """
-    cache_key = f"{ticker}_{expiry_val}_{vola_val}_{data_id}"
+    cache_key = f"{ticker}_{expiry_date}_{expiry_days}_{vola_val}_{data_id}"
     if cache_key not in heston_cache:
-        atm_iv = YFProvider().get_atm_iv(ticker, expiry_val)
-        print(f"DEBUG: Fetched ATM IV for {ticker}: {atm_iv}")
+        atm_iv = (
+            None if expiry_date is None else YFProvider().get_atm_iv(ticker, expiry_date)
+        )
+        print(f"DEBUG: ATM IV for {ticker} @ {expiry_date}: {atm_iv}")
         # A None here means the chain gave us nothing usable; estimate_heston_parameters
         # then derives v0 from realized volatility instead of an invented constant.
         heston_params = estimate_heston_parameters(
             df_result,
             market_v0=None if atm_iv is None else atm_iv**2,
-            tau=expiry_val / 365,
+            tau=expiry_days / 365,
         )
         _cache_store(heston_cache, cache_key, (atm_iv, heston_params))
     return heston_cache[cache_key]
@@ -758,15 +805,16 @@ def _build_price_panel(
     [
         Input("data-store", "data"),
         Input("vola-slider", "value"),
-        Input("expiry-slider", "value"),
+        Input("expiry-dropdown", "value"),
     ],
     [State("ticker-input", "value")],
 )
-def update_option_panel(json_data, vola_val, expiry_val, ticker):
-    if json_data is None:
+def update_option_panel(json_data, vola_val, expiry_value, ticker):
+    # None means load_expirations has not answered yet; NO_EXPIRY is a real answer.
+    if json_data is None or expiry_value is None:
         raise exceptions.PreventUpdate
     try:
-        return _build_option_panel(json_data, vola_val, expiry_val, ticker)
+        return _build_option_panel(json_data, vola_val, expiry_value, ticker)
     except Exception as exc:
         print(f"ERROR: option panel update failed: {exc}")
         return (
@@ -777,19 +825,30 @@ def update_option_panel(json_data, vola_val, expiry_val, ticker):
         )
 
 
-def _build_option_panel(json_data, vola_val, expiry_val, ticker):
+def _build_option_panel(json_data, vola_val, expiry_value, ticker):
     """
     Builds the Heston price curve and the option metrics in the header.
 
     :param json_data: Serialized OHLCV DataFrame from the data store.
     :param vola_val: HMM volatility lookback window in trading days.
-    :param expiry_val: Option expiry in calendar days.
+    :param expiry_value: A listed expiry date, or NO_EXPIRY for tickers with none.
     :param ticker: Active ticker symbol.
     :return: Tuple matching the callback's output list.
     """
     df_result, data_id = _get_regimes(json_data, vola_val)
+
+    # Without a listed expiry there is nothing to read an implied volatility from,
+    # so price a default tenor off realized volatility rather than leave the panel
+    # blank. max(1, ...) keeps tau positive if an expiry lapses while the page is open.
+    expiry_date = None if expiry_value == NO_EXPIRY else expiry_value
+    expiry_val = (
+        DEFAULT_EXPIRY_DAYS
+        if expiry_date is None
+        else max(1, (pd.Timestamp(expiry_date) - pd.Timestamp.now().normalize()).days)
+    )
+
     atm_iv, heston_params = _get_heston(
-        df_result, ticker, expiry_val, vola_val, data_id
+        df_result, ticker, expiry_date, expiry_val, vola_val, data_id
     )
 
     S0 = float(df_result["Close"].iloc[-1])
@@ -831,8 +890,8 @@ def _build_option_panel(json_data, vola_val, expiry_val, ticker):
         vola_label_style = {"color": LABEL_COLOR, "fontSize": "0.75rem"}
         vola_tooltip = (
             f"At-the-money implied volatility for {ticker}, averaged over the call "
-            f"and the put nearest spot on the listed expiry closest to "
-            f"{expiry_val} days. It sets v0 for the Heston prices."
+            f"and the put nearest spot on the {expiry_date} chain. It sets v0 for "
+            f"the Heston prices."
         )
 
     return (

@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import yfinance as yf
 
@@ -49,32 +48,41 @@ class YFProvider(DataProvider):
         except Exception as e:
             print(f"An error occurred while fetching data for ticker {ticker}: {e}")
             return pd.DataFrame()
-    def get_atm_iv(self, ticker: str, target_days: int) -> float | None:
+    def get_expirations(self, ticker: str) -> list[str]:
         """
-        Fetches ATM Implied Volatility for the expiry closest to target_days.
-        Averages ATM Call and Put IVs.
+        Lists the option expiry dates Yahoo carries for a ticker.
+
+        This is static metadata rather than a quote, so it is served even while the
+        market is closed - unlike the bids, asks and implied volatilities inside the
+        chain itself, which go blank outside trading hours.
 
         :param ticker: The ticker symbol.
-        :param target_days: Desired days to expiry; the closest listed one is used.
+        :return: Expiry dates as 'YYYY-MM-DD' strings, empty when none are listed.
+        """
+        try:
+            return list(yf.Ticker(ticker).options)
+        except Exception as e:
+            print(f"Error listing expirations for {ticker}: {e}")
+            return []
+
+    def get_atm_iv(self, ticker: str, expiry: str) -> float | None:
+        """
+        Fetches ATM Implied Volatility for one listed expiry.
+        Averages ATM Call and Put IVs.
+
+        The caller passes an expiry taken from get_expirations, so the volatility
+        and the tenor it is priced with refer to the same contract.
+
+        :param ticker: The ticker symbol.
+        :param expiry: A listed expiry date as 'YYYY-MM-DD'.
         :return: The averaged ATM implied volatility, or None when the chain cannot
-            supply a usable one - no options listed (Yahoo carries none for European
-            tickers), no implied volatility, or a value outside IV_BOUNDS. Callers
-            are expected to fall back rather than receive an invented number.
+            supply a usable one - no implied volatility quoted, or a value outside
+            IV_BOUNDS. Callers are expected to fall back rather than receive an
+            invented number.
         """
         try:
             t = yf.Ticker(ticker)
-            expirations = pd.to_datetime(t.options)
-            if expirations.empty:
-                print(f"No option chain listed for {ticker}.")
-                return None
-
-            # Find closest expiration
-            target_date = pd.Timestamp.now() + pd.Timedelta(days=target_days)
-            # Use .values.astype(np.int64) to get nanoseconds for comparison
-            diffs = (expirations - target_date).values
-            closest_exp = expirations[np.abs(diffs).argmin()]
-            exp_str = closest_exp.strftime("%Y-%m-%d")
-
+            exp_str = expiry
             chain = t.option_chain(exp_str)
             spot = t.history(period="1d")["Close"].iloc[-1]
 
