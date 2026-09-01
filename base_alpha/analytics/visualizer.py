@@ -303,6 +303,14 @@ class Visualizer:
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="#1a1a2e",
             hovermode="x unified",
+            # plotly_dark leaves hoverlabel.bgcolor unset, and the unified hover box
+            # otherwise derives its background from paper_bgcolor - which is
+            # transparent here, leaving light text on a near-white box.
+            hoverlabel=dict(
+                bgcolor="#1a1a2e",
+                bordercolor="#00d1b2",
+                font=dict(color="#E0E0E0", size=12),
+            ),
             legend=dict(
                 orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
             ),
