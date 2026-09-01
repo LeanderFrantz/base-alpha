@@ -16,6 +16,10 @@ from base_alpha.models.heston import (
     get_heston_fft_puts,
     estimate_heston_parameters,
     realized_vola_window,
+    build_calibration_set,
+    calibrate_v0_theta,
+    effective_vola,
+    CALIBRATION_DAY_RANGE,
 )
 from base_alpha.analytics.visualizer import Visualizer
 import pandas as pd
@@ -539,6 +543,9 @@ model_cache = {}
 # Global cache for Heston parameters
 heston_cache = {}
 
+# Global cache for the fitted surface, one entry per ticker per trading day.
+calibration_cache = {}
+
 # Global cache for quoted option prices, so the panel does not refetch the same
 # chain the implied volatility already came from.
 quotes_cache = {}
@@ -617,6 +624,25 @@ def _get_forecaster(
     return model_cache[cache_key]
 
 
+def _get_calibration(ticker: str) -> dict | None:
+    """
+    Fits v0 and theta to the quoted surface, once per ticker per trading day.
+
+    :param ticker: The ticker symbol.
+    :return: The calibration, or None whenever the chain cannot support one - the
+        surface is unquoted outside US trading hours and absent entirely for the
+        many tickers Yahoo lists no options for. Callers must fall back.
+    """
+    today = pd.Timestamp.now().normalize()
+    cache_key = f"{ticker}_{today.date()}"
+    if cache_key not in calibration_cache:
+        chains = YFProvider().get_calibration_quotes(ticker, *CALIBRATION_DAY_RANGE)
+        fit = calibrate_v0_theta(build_calibration_set(chains, today))
+        print(f"DEBUG: calibration for {ticker}: {fit}")
+        _cache_store(calibration_cache, cache_key, fit)
+    return calibration_cache[cache_key]
+
+
 def _get_heston(
     df_result: pd.DataFrame,
     ticker: str,
@@ -634,22 +660,26 @@ def _get_heston(
 
     :param expiry_date: A listed expiry, or None when the ticker has none.
     :param expiry_days: Calendar days to that expiry, which sets tau.
-    :return: Tuple of (ATM implied volatility or None, Heston parameter dict).
+    :return: (ATM implied volatility or None, Heston parameters, calibration or None).
     """
     cache_key = f"{ticker}_{expiry_date}_{expiry_days}_{vola_val}_{data_id}"
     if cache_key not in heston_cache:
+        calibration = _get_calibration(ticker)
         atm_iv = (
             None if expiry_date is None else YFProvider().get_atm_iv(ticker, expiry_date)
         )
         print(f"DEBUG: ATM IV for {ticker} @ {expiry_date}: {atm_iv}")
-        # A None here means the chain gave us nothing usable; estimate_heston_parameters
-        # then derives v0 from realized volatility instead of an invented constant.
+        # Three tiers in descending order of quality: a fit to the quoted surface,
+        # the ATM implied variance with theta pinned to it, or realized volatility.
+        # Only the last always works, which is what keeps the panel priced when the
+        # market is closed or the ticker has no options at all.
         heston_params = estimate_heston_parameters(
             df_result,
             market_v0=None if atm_iv is None else atm_iv**2,
             tau=expiry_days / 365,
+            calibration=calibration,
         )
-        _cache_store(heston_cache, cache_key, (atm_iv, heston_params))
+        _cache_store(heston_cache, cache_key, (atm_iv, heston_params, calibration))
     return heston_cache[cache_key]
 
 
@@ -885,7 +915,7 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
         else max(1, (pd.Timestamp(expiry_date) - pd.Timestamp.now().normalize()).days)
     )
 
-    atm_iv, heston_params = _get_heston(
+    atm_iv, heston_params, calibration = _get_heston(
         df_result, ticker, expiry_date, expiry_val, vola_val, data_id
     )
 
@@ -918,11 +948,24 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
     # Find ATM Call/Put price (index where strike is closest to S0)
     idx_atm = (np.abs(strikes - S0)).argmin()
 
-    # heston_params["v0"] is by construction the variance these prices came from,
-    # whichever source supplied it, so the header never shows a number the model
-    # did not use.
-    pricing_vola = float(np.sqrt(heston_params["v0"]))
-    if atm_iv is None:
+    # The volatility the model actually priced this tenor with, whichever tier
+    # supplied it, so the header never shows a number the model did not use.
+    pricing_vola = effective_vola(heston_params)
+    if calibration is not None:
+        vola_label = f"CALIB. VOLA ({expiry_val}D)"
+        vola_value_style = {"color": METRIC_COLOR}
+        vola_label_style = {"color": LABEL_COLOR, "fontSize": CAPTION_SIZE}
+        vola_tooltip = (
+            f"Fitted to {ticker}'s quoted option surface: {calibration['n_quotes']} "
+            f"out-of-the-money contracts across {calibration['n_maturities']} "
+            f"expiries, with a price RMSE of {calibration['rmse_price']:.2f}. The fit "
+            f"sets v0 to {np.sqrt(calibration['v0']):.1%} and the long-run level "
+            f"theta to {np.sqrt(calibration['theta']):.1%}; the figure shown is the "
+            f"variance the model expects over these {expiry_val} days, which is what "
+            f"prices the curve below. Interest rate and dividend come from put-call "
+            f"parity rather than an assumption."
+        )
+    elif atm_iv is None:
         # The chain gave us nothing usable, so these prices rest on realized
         # volatility. Amber marks the whole metric as a fallback.
         vola_label = f"REALIZED VOLA ({expiry_val}D)"
