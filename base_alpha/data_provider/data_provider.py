@@ -4,6 +4,12 @@ import yfinance as yf
 
 from .base import DataProvider
 
+# Yahoo reports a 1e-5 placeholder when it has no implied volatility, and its
+# solver bottoms out on a ladder of tiny values when the chain carries no quotes
+# (outside US trading hours the whole chain is regularly unquoted). Anything
+# outside this band is not a market price and must not reach the pricing model.
+IV_BOUNDS = (0.01, 3.0)
+
 
 class YFProvider(DataProvider):
     """
@@ -43,16 +49,24 @@ class YFProvider(DataProvider):
         except Exception as e:
             print(f"An error occurred while fetching data for ticker {ticker}: {e}")
             return pd.DataFrame()
-    def get_atm_iv(self, ticker: str, target_days: int) -> float:
+    def get_atm_iv(self, ticker: str, target_days: int) -> float | None:
         """
         Fetches ATM Implied Volatility for the expiry closest to target_days.
         Averages ATM Call and Put IVs.
+
+        :param ticker: The ticker symbol.
+        :param target_days: Desired days to expiry; the closest listed one is used.
+        :return: The averaged ATM implied volatility, or None when the chain cannot
+            supply a usable one - no options listed (Yahoo carries none for European
+            tickers), no implied volatility, or a value outside IV_BOUNDS. Callers
+            are expected to fall back rather than receive an invented number.
         """
         try:
             t = yf.Ticker(ticker)
             expirations = pd.to_datetime(t.options)
             if expirations.empty:
-                return 0.15
+                print(f"No option chain listed for {ticker}.")
+                return None
 
             # Find closest expiration
             target_date = pd.Timestamp.now() + pd.Timedelta(days=target_days)
@@ -73,9 +87,19 @@ class YFProvider(DataProvider):
             put_iv = chain.puts.loc[atm_strike_put, "impliedVolatility"]
 
             if pd.isna(call_iv) or pd.isna(put_iv):
-                return 0.15
+                print(f"No implied volatility quoted for {ticker} at {exp_str}.")
+                return None
 
-            return float((call_iv + put_iv) / 2)
+            atm_iv = float((call_iv + put_iv) / 2)
+            low, high = IV_BOUNDS
+            if not low <= atm_iv <= high:
+                print(
+                    f"Discarding implausible ATM IV for {ticker}: {atm_iv:.6f} "
+                    f"(outside {low:.0%}-{high:.0%}); the chain is likely unquoted."
+                )
+                return None
+
+            return atm_iv
         except Exception as e:
             print(f"Error fetching IV: {e}")
-            return 0.15
+            return None

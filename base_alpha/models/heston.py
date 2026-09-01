@@ -4,6 +4,26 @@ from scipy.fftpack import fft
 from scipy.interpolate import interp1d
 from typing import Dict
 
+TRADING_DAYS_PER_YEAR = 252
+
+# Shortest realized-volatility window. A one-day expiry would otherwise ask for a
+# variance over a single return, which is undefined.
+MIN_VOLA_WINDOW = 20
+
+
+def realized_vola_window(tau: float) -> int:
+    """
+    Number of trading days of history used to estimate variance for a given tenor.
+
+    theta is pinned to v0 in estimate_heston_parameters, so the variance is flat
+    over the option's life and v0 has to stand for that whole life rather than for
+    the last month regardless of expiry.
+
+    :param tau: Time to maturity in years.
+    :return: Window length in trading days, at least MIN_VOLA_WINDOW.
+    """
+    return max(MIN_VOLA_WINDOW, int(round(tau * TRADING_DAYS_PER_YEAR)))
+
 
 def heston_char_func(
     u: complex,
@@ -162,7 +182,8 @@ def estimate_heston_parameters(df_ohlcv: pd.DataFrame, market_v0: float = None, 
     # If market_v0 is provided (from IV), use it, otherwise estimate historical v0
     if market_v0 is None:
         log_returns = np.log(df_ohlcv['Close'] / df_ohlcv['Close'].shift(1)).dropna()
-        v0 = float(log_returns.tail(20).var() * 252)
+        window = realized_vola_window(tau)
+        v0 = float(log_returns.tail(window).var() * TRADING_DAYS_PER_YEAR)
     else:
         v0 = market_v0
 

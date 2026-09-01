@@ -7,6 +7,16 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 
+# Feature sets shared between the model and the dashboard's feature toggles.
+# MANDATORY_FEATURES always feed the meta-learner; OPTIONAL_FEATURES can be
+# switched off from the UI.
+MANDATORY_FEATURES = ["Regime", "Prob_LowVola", "Prob_HighVola"]
+OPTIONAL_FEATURES = ["RSI_14", "dist_sma_200", "MACD_12_26_9", "LSTM_Feature"]
+
+# Longest indicator window used in _prepare_indicators. Shorter inputs cannot
+# produce a single complete feature row.
+SMA_WINDOW = 200
+
 
 class LSTMModel(nn.Module):
     """
@@ -73,15 +83,8 @@ class Forecaster:
 
         # Utilities
         self.scaler = StandardScaler()
-        self.feature_cols_xgb = [
-            "Regime",
-            "Prob_LowVola",
-            "Prob_HighVola",
-            "RSI_14",
-            "MACD_12_26_9",
-            "dist_sma_200",
-            "LSTM_Feature",  # The prediction from Level 0
-        ]
+        # "LSTM_Feature" is the prediction from Level 0
+        self.feature_cols_xgb = MANDATORY_FEATURES + OPTIONAL_FEATURES
 
     def _prepare_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -99,7 +102,7 @@ class Forecaster:
         else:
             df["MACD_12_26_9"] = 0.0
 
-        sma_200 = ta.sma(df["Close"], length=200)
+        sma_200 = ta.sma(df["Close"], length=SMA_WINDOW)
         df["dist_sma_200"] = (df["Close"] - sma_200) / sma_200
 
         df["log_ret"] = np.log(df["Close"] / df["Close"].shift(1))
