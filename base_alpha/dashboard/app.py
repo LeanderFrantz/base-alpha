@@ -78,6 +78,13 @@ app.layout = dbc.Container(
             dismissable=True,
             className="mb-3",
         ),
+        dbc.Alert(
+            id="option-alert",
+            color="danger",
+            is_open=False,
+            dismissable=True,
+            className="mb-3",
+        ),
         dbc.Tooltip(id="iv-tooltip", target="metric-iv", placement="bottom"),
         dbc.Row(
             [
@@ -510,6 +517,10 @@ model_cache = {}
 # Global cache for Heston parameters
 heston_cache = {}
 
+# Global cache for the HMM fit. Both panels need the same regimes, and they do not
+# depend on horizon, expiry or confidence level, so those must not refit the model.
+regime_cache = {}
+
 
 def _cache_store(cache: dict, key: str, value) -> None:
     """
@@ -526,83 +537,18 @@ def _cache_store(cache: dict, key: str, value) -> None:
         cache.pop(next(iter(cache)))
 
 
-# CALLBACK: Main Chart, Heston Chart & Metrics
-@app.callback(
-    [
-        Output("main-chart", "figure"),
-        Output("heston-chart", "figure"),
-        Output("metric-move", "children"),
-        Output("metric-move-label", "children"),
-        Output("metric-ticker", "children"),
-        Output("metric-regime", "children"),
-        Output("metric-call", "children"),
-        Output("metric-put", "children"),
-        Output("metric-iv", "children"),
-        Output("label-call", "children"),
-        Output("label-put", "children"),
-        Output("label-iv", "children"),
-        Output("metric-iv", "style"),
-        Output("label-iv", "style"),
-        Output("iv-tooltip", "children"),
-        Output("status-alert", "children", allow_duplicate=True),
-        Output("status-alert", "color", allow_duplicate=True),
-        Output("status-alert", "is_open", allow_duplicate=True),
-    ],
-    [
-        Input("data-store", "data"),
-        Input("vola-slider", "value"),
-        Input("horizon-slider", "value"),
-        Input("expiry-slider", "value"),
-        Input("feature-toggles", "value"),
-        Input("ci-level", "value"),
-    ],
-    [State("ticker-input", "value")],
-    prevent_initial_call="initial_duplicate",
-)
-def update_all(
-    json_data, vola_val, horizon_val, expiry_val, selected_features, ci_level, ticker
-):
-    if json_data is None:
-        raise exceptions.PreventUpdate
-
-    try:
-        return _build_dashboard(
-            json_data,
-            vola_val,
-            horizon_val,
-            expiry_val,
-            selected_features,
-            ci_level,
-            ticker,
-        )
-    except Exception as exc:
-        # A too short date range (the indicators need ~200 rows) or a ticker
-        # without an option chain must not leave the user staring at a stale
-        # chart with no explanation.
-        print(f"ERROR: dashboard update failed: {exc}")
-        return (
-            *(dash.no_update,) * 15,
-            f"Could not update the dashboard: {exc}",
-            "danger",
-            True,
-        )
-
-
-def _build_dashboard(
-    json_data, vola_val, horizon_val, expiry_val, selected_features, ci_level, ticker
-):
+def _get_regimes(json_data: str, vola_val: int) -> tuple[pd.DataFrame, str]:
     """
-    Runs the full pipeline and assembles every output of the update_all callback.
+    Runs regime detection on the stored data, memoized on payload and window.
 
     :param json_data: Serialized OHLCV DataFrame from the data store.
     :param vola_val: HMM volatility lookback window in trading days.
-    :param horizon_val: Forecast horizon in trading days.
-    :param expiry_val: Option expiry in calendar days.
-    :param selected_features: Optional features enabled in the UI.
-    :param ci_level: Confidence level of the outer forecast band, in percent.
-    :param ticker: Active ticker symbol.
-    :return: Tuple matching the callback's output list.
+    :return: Tuple of (DataFrame with regimes, stable dataset identifier).
     """
+    cache_key = f"{hash(json_data)}_{vola_val}"
+    if cache_key in regime_cache:
+        return regime_cache[cache_key]
+
     df_ohlcv = pd.read_json(io.StringIO(json_data), orient="split")
     if len(df_ohlcv) < MIN_HISTORY:
         raise ValueError(
@@ -610,23 +556,54 @@ def _build_dashboard(
             f"feature needs at least {MIN_HISTORY}. Widen the date range and fetch again."
         )
 
-    # 1. Regime Detection
     detector = RegimeDetector(n_regimes=2, vola_window=vola_val)
     df_result = detector.fit_predict(df_ohlcv)
-    latest_regime_val = int(df_result["Regime"].iloc[-1])
-    latest_regime_text = "Low Vol" if latest_regime_val == 0 else "High Vol"
-
-    # Create a stable identifier for the dataset
     data_id = f"{len(df_ohlcv)}_{df_ohlcv.index[0]}_{df_ohlcv.index[-1]}"
+    _cache_store(regime_cache, cache_key, (df_result, data_id))
+    return df_result, data_id
 
-    # 2. Heston Parameter Estimation
-    # The parameters are derived from df_result, so the key has to cover every
-    # input that changes it - ticker and expiry alone would serve stale values
-    # after the volatility slider or the date range moved.
-    heston_key = f"{ticker}_{expiry_val}_{vola_val}_{data_id}"
-    if heston_key not in heston_cache:
-        provider = YFProvider()
-        atm_iv = provider.get_atm_iv(ticker, expiry_val)
+
+def _get_forecaster(
+    df_result: pd.DataFrame,
+    ticker: str,
+    vola_val: int,
+    selected_features: list,
+    data_id: str,
+) -> Forecaster:
+    """
+    Returns a trained forecaster, training one only when no cached model matches.
+
+    :param df_result: DataFrame from RegimeDetector.fit_predict().
+    :param ticker: Active ticker symbol.
+    :param vola_val: HMM volatility lookback window, which shapes the regimes.
+    :param selected_features: Optional features enabled in the UI.
+    :param data_id: Stable identifier of the loaded dataset.
+    :return: The trained Forecaster.
+    """
+    cache_key = f"{ticker}_{vola_val}_{str(selected_features)}_{data_id}"
+    if cache_key not in model_cache:
+        forecaster = Forecaster(forecast_horizon=TRAIN_HORIZON)
+        forecaster.feature_cols_xgb = MANDATORY_FEATURES + list(selected_features or [])
+        forecaster.train(df_result)
+        _cache_store(model_cache, cache_key, forecaster)
+    return model_cache[cache_key]
+
+
+def _get_heston(
+    df_result: pd.DataFrame, ticker: str, expiry_val: int, vola_val: int, data_id: str
+) -> tuple[float | None, dict]:
+    """
+    Returns ATM implied volatility and Heston parameters for the given expiry.
+
+    The parameters are derived from df_result, so the key has to cover every input
+    that changes it - ticker and expiry alone would serve stale values after the
+    volatility slider or the date range moved.
+
+    :return: Tuple of (ATM implied volatility or None, Heston parameter dict).
+    """
+    cache_key = f"{ticker}_{expiry_val}_{vola_val}_{data_id}"
+    if cache_key not in heston_cache:
+        atm_iv = YFProvider().get_atm_iv(ticker, expiry_val)
         print(f"DEBUG: Fetched ATM IV for {ticker}: {atm_iv}")
         # A None here means the chain gave us nothing usable; estimate_heston_parameters
         # then derives v0 from realized volatility instead of an invented constant.
@@ -635,23 +612,73 @@ def _build_dashboard(
             market_v0=None if atm_iv is None else atm_iv**2,
             tau=expiry_val / 365,
         )
-        _cache_store(heston_cache, heston_key, (atm_iv, heston_params))
-    else:
-        atm_iv, heston_params = heston_cache[heston_key]
-        print(f"DEBUG: Using cached Heston parameters for {heston_key}")
+        _cache_store(heston_cache, cache_key, (atm_iv, heston_params))
+    return heston_cache[cache_key]
 
-    # 3. Forecaster Prediction
-    cache_key = f"{ticker}_{vola_val}_{str(selected_features)}_{data_id}"
 
-    if cache_key not in model_cache:
-        forecaster = Forecaster(forecast_horizon=TRAIN_HORIZON)
-        active_features = MANDATORY_FEATURES + list(selected_features or [])
-        forecaster.feature_cols_xgb = active_features
-        forecaster.train(df_result)
-        _cache_store(model_cache, cache_key, forecaster)
-    else:
-        forecaster = model_cache[cache_key]
+# CALLBACK: Price chart, forecast and the metrics derived from them.
+# Split from the option panel below so that changing the expiry does not rebuild
+# this figure, and changing the horizon or confidence level does not reach for the
+# option chain over the network.
+@app.callback(
+    [
+        Output("main-chart", "figure"),
+        Output("metric-move", "children"),
+        Output("metric-move-label", "children"),
+        Output("metric-ticker", "children"),
+        Output("metric-regime", "children"),
+        Output("status-alert", "children", allow_duplicate=True),
+        Output("status-alert", "color", allow_duplicate=True),
+        Output("status-alert", "is_open", allow_duplicate=True),
+    ],
+    [
+        Input("data-store", "data"),
+        Input("vola-slider", "value"),
+        Input("horizon-slider", "value"),
+        Input("feature-toggles", "value"),
+        Input("ci-level", "value"),
+    ],
+    [State("ticker-input", "value")],
+    prevent_initial_call="initial_duplicate",
+)
+def update_price_panel(
+    json_data, vola_val, horizon_val, selected_features, ci_level, ticker
+):
+    if json_data is None:
+        raise exceptions.PreventUpdate
+    try:
+        return _build_price_panel(
+            json_data, vola_val, horizon_val, selected_features, ci_level, ticker
+        )
+    except Exception as exc:
+        # A too short date range (the indicators need ~200 rows) must not leave the
+        # user staring at a stale chart with no explanation.
+        print(f"ERROR: price panel update failed: {exc}")
+        return (*(dash.no_update,) * 5, f"Could not update the charts: {exc}", "danger", True)
 
+
+def _build_price_panel(
+    json_data, vola_val, horizon_val, selected_features, ci_level, ticker
+):
+    """
+    Builds the price figure and its metrics.
+
+    :param json_data: Serialized OHLCV DataFrame from the data store.
+    :param vola_val: HMM volatility lookback window in trading days.
+    :param horizon_val: Forecast horizon in trading days.
+    :param selected_features: Optional features enabled in the UI.
+    :param ci_level: Confidence level of the outer forecast band, in percent.
+    :param ticker: Active ticker symbol.
+    :return: Tuple matching the callback's output list.
+    """
+    df_result, data_id = _get_regimes(json_data, vola_val)
+    latest_regime_text = (
+        "Low Vol" if int(df_result["Regime"].iloc[-1]) == 0 else "High Vol"
+    )
+
+    forecaster = _get_forecaster(
+        df_result, ticker, vola_val, selected_features, data_id
+    )
     prediction_cum = forecaster.predict_latest(df_result)
 
     # Projection
@@ -687,12 +714,8 @@ def _build_dashboard(
         )
 
     # Calculate Move for the selected horizon
-    prediction_for_horizon = daily_log_return * horizon_val
-    expected_pct_change = (np.exp(prediction_for_horizon) - 1) * 100
-    metric_move_text = f"{expected_pct_change:.2f}%"
-    metric_move_label = f"EXP. {horizon_val}D MOVE"
+    expected_pct_change = (np.exp(daily_log_return * horizon_val) - 1) * 100
 
-    # Main Chart: history, regimes and the projection in one figure
     fig_main = Visualizer.plot_price_forecast(
         df_result,
         ticker,
@@ -702,26 +725,87 @@ def _build_dashboard(
         lookback_days=DEFAULT_LOOKBACK,
     )
 
-    # Heston Chart
-    S0 = last_price
-    strike_range = np.linspace(S0 * 0.8, S0 * 1.2, 50)
+    return (
+        fig_main,
+        f"{expected_pct_change:.2f}%",
+        f"EXP. {horizon_val}D MOVE",
+        ticker,
+        latest_regime_text,
+        "",
+        "danger",
+        False,
+    )
 
+
+# CALLBACK: Heston chart and the option metrics. Depends on the expiry, which the
+# price panel above does not use, and is the only path that hits the network.
+@app.callback(
+    [
+        Output("heston-chart", "figure"),
+        Output("metric-call", "children"),
+        Output("metric-put", "children"),
+        Output("metric-iv", "children"),
+        Output("label-call", "children"),
+        Output("label-put", "children"),
+        Output("label-iv", "children"),
+        Output("metric-iv", "style"),
+        Output("label-iv", "style"),
+        Output("iv-tooltip", "children"),
+        Output("option-alert", "children"),
+        Output("option-alert", "color"),
+        Output("option-alert", "is_open"),
+    ],
+    [
+        Input("data-store", "data"),
+        Input("vola-slider", "value"),
+        Input("expiry-slider", "value"),
+    ],
+    [State("ticker-input", "value")],
+)
+def update_option_panel(json_data, vola_val, expiry_val, ticker):
+    if json_data is None:
+        raise exceptions.PreventUpdate
+    try:
+        return _build_option_panel(json_data, vola_val, expiry_val, ticker)
+    except Exception as exc:
+        print(f"ERROR: option panel update failed: {exc}")
+        return (
+            *(dash.no_update,) * 10,
+            f"Could not price options: {exc}",
+            "danger",
+            True,
+        )
+
+
+def _build_option_panel(json_data, vola_val, expiry_val, ticker):
+    """
+    Builds the Heston price curve and the option metrics in the header.
+
+    :param json_data: Serialized OHLCV DataFrame from the data store.
+    :param vola_val: HMM volatility lookback window in trading days.
+    :param expiry_val: Option expiry in calendar days.
+    :param ticker: Active ticker symbol.
+    :return: Tuple matching the callback's output list.
+    """
+    df_result, data_id = _get_regimes(json_data, vola_val)
+    atm_iv, heston_params = _get_heston(
+        df_result, ticker, expiry_val, vola_val, data_id
+    )
+
+    S0 = float(df_result["Close"].iloc[-1])
+    strike_range = np.linspace(S0 * 0.8, S0 * 1.2, 50)
     strikes, call_prices = get_heston_fft_calls(
         **heston_params, interpolate_strikes=strike_range
     )
     _, put_prices = get_heston_fft_puts(
         **heston_params, interpolate_strikes=strike_range
     )
-
     fig_heston = Visualizer.plot_heston_prices(
         strikes, call_prices, put_prices, S0, expiry_val
     )
 
-    # Metrics
     # Find ATM Call/Put price (index where strike is closest to S0)
     idx_atm = (np.abs(strikes - S0)).argmin()
-    metric_call_text = f"{call_prices[idx_atm]:.2f}"
-    metric_put_text = f"{put_prices[idx_atm]:.2f}"
 
     # heston_params["v0"] is by construction the variance these prices came from,
     # whichever source supplied it, so the header never shows a number the model
@@ -752,14 +836,9 @@ def _build_dashboard(
         )
 
     return (
-        fig_main,
         fig_heston,
-        metric_move_text,
-        metric_move_label,
-        ticker,
-        latest_regime_text,
-        metric_call_text,
-        metric_put_text,
+        f"{call_prices[idx_atm]:.2f}",
+        f"{put_prices[idx_atm]:.2f}",
         f"{pricing_vola:.2%}",
         f"FAIR CALL ({expiry_val}D)",
         f"FAIR PUT ({expiry_val}D)",
