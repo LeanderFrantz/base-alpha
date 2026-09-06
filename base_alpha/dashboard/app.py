@@ -1,5 +1,6 @@
 import io
 import os
+import threading
 import dash
 from dash import dcc, html, Input, Output, State, exceptions
 import dash_bootstrap_components as dbc
@@ -554,6 +555,10 @@ quotes_cache = {}
 # depend on horizon, expiry or confidence level, so those must not refit the model.
 regime_cache = {}
 
+# Guards the fit in _get_regimes. Dash answers callbacks on a thread pool, so both
+# panels can miss the cache on the same key at once and fit the same HMM twice.
+regime_lock = threading.Lock()
+
 
 def _cache_store(cache: dict, key: str, value) -> None:
     """
@@ -582,20 +587,25 @@ def _get_regimes(json_data: str, vola_val: int) -> tuple[pd.DataFrame, str, dict
     if cache_key in regime_cache:
         return regime_cache[cache_key]
 
-    df_ohlcv = pd.read_json(io.StringIO(json_data), orient="split")
-    if len(df_ohlcv) < MIN_HISTORY:
-        raise ValueError(
-            f"only {len(df_ohlcv)} trading days loaded, but the {SMA_WINDOW}-day SMA "
-            f"feature needs at least {MIN_HISTORY}. Widen the date range and fetch again."
-        )
+    with regime_lock:
+        # the callback we queued behind may have just fitted this very key
+        if cache_key in regime_cache:
+            return regime_cache[cache_key]
 
-    detector = RegimeDetector(n_regimes=2, vola_window=vola_val)
-    df_result = detector.fit_predict(df_ohlcv)
-    data_id = f"{len(df_ohlcv)}_{df_ohlcv.index[0]}_{df_ohlcv.index[-1]}"
-    # computed while the fitted detector is still around; transmat_ is otherwise lost
-    summary = detector.regime_summary(df_result)
-    _cache_store(regime_cache, cache_key, (df_result, data_id, summary))
-    return df_result, data_id, summary
+        df_ohlcv = pd.read_json(io.StringIO(json_data), orient="split")
+        if len(df_ohlcv) < MIN_HISTORY:
+            raise ValueError(
+                f"only {len(df_ohlcv)} trading days loaded, but the {SMA_WINDOW}-day SMA "
+                f"feature needs at least {MIN_HISTORY}. Widen the date range and fetch again."
+            )
+
+        detector = RegimeDetector(n_regimes=2, vola_window=vola_val)
+        df_result = detector.fit_predict(df_ohlcv)
+        data_id = f"{len(df_ohlcv)}_{df_ohlcv.index[0]}_{df_ohlcv.index[-1]}"
+        # computed while the fitted detector is still around; transmat_ is otherwise lost
+        summary = detector.regime_summary(df_result)
+        _cache_store(regime_cache, cache_key, (df_result, data_id, summary))
+        return df_result, data_id, summary
 
 
 def _get_forecaster(
