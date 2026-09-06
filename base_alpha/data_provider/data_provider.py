@@ -174,9 +174,9 @@ class YFProvider(DataProvider):
         :param ticker: The ticker symbol.
         :param expiry: A listed expiry date as 'YYYY-MM-DD'.
         :return: The averaged ATM implied volatility, or None when the chain cannot
-            supply a usable one - no implied volatility quoted, or a value outside
-            IV_BOUNDS. Callers are expected to fall back rather than receive an
-            invented number.
+            supply a usable one - an ATM contract without a two-sided quote, no
+            implied volatility quoted, or a value outside IV_BOUNDS. Callers are
+            expected to fall back rather than receive an invented number.
         """
         try:
             t = yf.Ticker(ticker)
@@ -188,9 +188,20 @@ class YFProvider(DataProvider):
             atm_strike_call = (chain.calls["strike"] - spot).abs().idxmin()
             atm_strike_put = (chain.puts["strike"] - spot).abs().idxmin()
 
+            # An untraded contract keeps the implied volatility of whenever it
+            # last traded, so the field alone does not say the number is current.
+            # Bid and ask do, which is the same test get_option_quotes applies.
+            call = chain.calls.loc[atm_strike_call]
+            put = chain.puts.loc[atm_strike_put]
+            if not all(
+                q > 0 for q in (call["bid"], call["ask"], put["bid"], put["ask"])
+            ):
+                print(f"ATM contracts for {ticker} at {exp_str} are unquoted.")
+                return None
+
             # Get IVs
-            call_iv = chain.calls.loc[atm_strike_call, "impliedVolatility"]
-            put_iv = chain.puts.loc[atm_strike_put, "impliedVolatility"]
+            call_iv = call["impliedVolatility"]
+            put_iv = put["impliedVolatility"]
 
             if pd.isna(call_iv) or pd.isna(put_iv):
                 print(f"No implied volatility quoted for {ticker} at {exp_str}.")
