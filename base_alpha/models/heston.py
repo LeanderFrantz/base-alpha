@@ -34,6 +34,9 @@ CALIBRATION_DAY_RANGE = (
     int(CALIBRATION_TAU_RANGE[1] * 365) - 1,
 )
 CALIBRATION_MONEYNESS = (0.7, 1.3)
+# Nominal rate the fallback tiers price with. The calibrated tier does not use it:
+# it takes the carry the quotes imply instead.
+FALLBACK_RATE = 0.03
 VARIANCE_BOUNDS = (1e-4, 4.0)
 
 
@@ -248,6 +251,24 @@ def _forward_and_discount(calls: tuple, puts: tuple) -> tuple[float, float] | No
     return min(discount, 1.0), forward
 
 
+def parity_carry(quotes: dict) -> tuple[float, float] | None:
+    """
+    The discount factor and forward one expiry's own quotes imply.
+
+    The calibration is fitted in the forward measure, so a caller that wants to
+    price it back has to discount the way _model_prices did. This hands it the
+    same two numbers for the single expiry being shown.
+
+    :param quotes: {"calls": (strikes, mids, spreads), "puts": ...} for one expiry,
+        as YFProvider.get_option_quotes returns.
+    :return: (discount factor, forward), or None when the chain cannot imply one -
+        an unquoted side, or a regression the parity check rejects.
+    """
+    if "calls" not in quotes or "puts" not in quotes:
+        return None
+    return _forward_and_discount(quotes["calls"], quotes["puts"])
+
+
 def build_calibration_set(chains: list, today: pd.Timestamp) -> list:
     """
     Turns raw quoted chains into the out-of-the-money set the fit runs on.
@@ -422,6 +443,7 @@ def estimate_heston_parameters(
     market_v0: float = None,
     tau: float = 30 / 365,
     calibration: Dict[str, float] = None,
+    carry: tuple[float, float] | None = None,
 ) -> Dict[str, float]:
     """
     Constructs Heston model parameters from the best source of variance available.
@@ -435,13 +457,27 @@ def estimate_heston_parameters(
     :param market_v0: ATM implied variance, when one could be read.
     :param tau: Time to maturity in years.
     :param calibration: Result of calibrate_v0_theta, when a fit succeeded.
+    :param carry: (discount factor, forward) from parity_carry for the expiry being
+        priced. Used only alongside a calibration, which was fitted against them.
     :return: Parameter dict, holding exactly the keyword arguments the FFT pricer
         takes - callers splat it, so nothing else may be added to it.
     """
     S0 = float(df_ohlcv['Close'].iloc[-1])
+    r = FALLBACK_RATE
 
     if calibration is not None:
         v0, theta = calibration["v0"], calibration["theta"]
+        if carry is not None:
+            # v0 and theta were fitted in the forward measure against the parity
+            # discount, so pricing them off the spot at a nominal rate would draw a
+            # curve that misses the very quotes it was fitted to. Setting S0 to F*D
+            # and r to -ln(D)/tau puts the pricer back there exactly: its forward
+            # comes out at F and its discount factor at D, and both the call
+            # transform and the put parity below it follow. Doing it through the
+            # two fields the pricer already takes keeps the dict a pure splat.
+            discount, forward = carry
+            S0 = forward * discount
+            r = -float(np.log(discount)) / tau
     elif market_v0 is not None:
         # One expiry cannot separate v0 from theta, so theta stays pinned to it
         v0 = theta = market_v0
@@ -457,6 +493,6 @@ def estimate_heston_parameters(
         "rho": STYLIZED_RHO,      # Leverage effect
         "kappa": STYLIZED_KAPPA,  # Stable reversion speed
         "sigma": STYLIZED_SIGMA,  # Vol-of-vol
-        "r": 0.03,
+        "r": r,
         "tau": tau,
     }

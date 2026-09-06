@@ -20,6 +20,7 @@ from base_alpha.models.heston import (
     build_calibration_set,
     calibrate_v0_theta,
     effective_vola,
+    parity_carry,
     CALIBRATION_DAY_RANGE,
 )
 from base_alpha.analytics.visualizer import Visualizer
@@ -701,6 +702,14 @@ def _get_heston(
             None if expiry_date is None else YFProvider().get_atm_iv(ticker, expiry_date)
         )
         print(f"DEBUG: ATM IV for {ticker} @ {expiry_date}: {atm_iv}")
+        # The calibration was fitted in each expiry's own forward measure, so the
+        # curve is priced back with the carry this expiry's quotes imply rather
+        # than a nominal rate. Only the calibrated tier reads it.
+        carry = (
+            None
+            if calibration is None or expiry_date is None
+            else parity_carry(YFProvider().get_option_quotes(ticker, expiry_date))
+        )
         # Three tiers in descending order of quality: a fit to the quoted surface,
         # the ATM implied variance with theta pinned to it, or realized volatility.
         # Only the last always works, which is what keeps the panel priced when the
@@ -710,6 +719,7 @@ def _get_heston(
             market_v0=None if atm_iv is None else atm_iv**2,
             tau=expiry_days / 365,
             calibration=calibration,
+            carry=carry,
         )
         _cache_store(heston_cache, cache_key, (atm_iv, heston_params, calibration))
     return heston_cache[cache_key]
