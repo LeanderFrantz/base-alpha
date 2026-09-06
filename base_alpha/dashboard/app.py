@@ -53,6 +53,11 @@ NO_EXPIRY = "__none__"
 # Upper bound for the module level caches below.
 MAX_CACHE_ENTRIES = 8
 
+# How long a quoted price or implied volatility may be served from cache. Both
+# move while the market is open, and their keys otherwise hold nothing that
+# changes intraday, so without this they would be frozen for the whole process.
+QUOTE_TTL_SECONDS = 300
+
 # Header colours. Amber flags a metric that is not a market quote but a fallback,
 # so a substituted number can never pass for a real one.
 METRIC_COLOR = "#00d1b2"
@@ -560,6 +565,19 @@ regime_cache = {}
 regime_lock = threading.Lock()
 
 
+def _quote_bucket() -> int:
+    """
+    Returns the index of the interval the current quote fetch belongs to.
+
+    Rolling the index into a cache key expires quoted market data without a
+    separate sweep, and because the index counts from the epoch it also turns
+    over at every trading day boundary.
+
+    :return: Bucket index, which advances once per QUOTE_TTL_SECONDS.
+    """
+    return int(pd.Timestamp.now().timestamp() // QUOTE_TTL_SECONDS)
+
+
 def _cache_store(cache: dict, key: str, value) -> None:
     """
     Stores a value in a module level cache and evicts the oldest entries once it
@@ -666,13 +684,17 @@ def _get_heston(
 
     The parameters are derived from df_result, so the key has to cover every input
     that changes it - ticker and expiry alone would serve stale values after the
-    volatility slider or the date range moved.
+    volatility slider or the date range moved. It also carries the quote bucket,
+    because the implied volatility below is a live quote. The calibration behind
+    it is keyed by trading day instead, so an intraday refresh reuses that fit.
 
     :param expiry_date: A listed expiry, or None when the ticker has none.
     :param expiry_days: Calendar days to that expiry, which sets tau.
     :return: (ATM implied volatility or None, Heston parameters, calibration or None).
     """
-    cache_key = f"{ticker}_{expiry_date}_{expiry_days}_{vola_val}_{data_id}"
+    cache_key = (
+        f"{ticker}_{expiry_date}_{expiry_days}_{vola_val}_{data_id}_{_quote_bucket()}"
+    )
     if cache_key not in heston_cache:
         calibration = _get_calibration(ticker)
         atm_iv = (
@@ -942,7 +964,7 @@ def _build_option_panel(json_data, vola_val, expiry_value, ticker):
     if expiry_date is None:
         market = {}
     else:
-        quotes_key = f"{ticker}_{expiry_date}"
+        quotes_key = f"{ticker}_{expiry_date}_{_quote_bucket()}"
         if quotes_key not in quotes_cache:
             _cache_store(
                 quotes_cache,
