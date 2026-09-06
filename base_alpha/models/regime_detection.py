@@ -36,6 +36,9 @@ class RegimeDetector:
             n_iter=n_iter,
             random_state=random_state,
         )
+        # Maps a reported regime back to the hidden state it came from, since
+        # fit_predict may relabel them by volatility. Set during fit_predict.
+        self._state_order = list(range(n_regimes))
 
     def _prepare_hmm_features(self, df_ohlcv: pd.DataFrame) -> pd.DataFrame:
         """
@@ -77,6 +80,11 @@ class RegimeDetector:
             probabilities = probabilities[
                 :, ::-1
             ]  # swap columns to match new regime labels
+            # transmat_ is left untouched by the relabelling, so anything reading it
+            # has to go through this mapping or it will report the wrong state.
+            self._state_order = [1, 0]
+        else:
+            self._state_order = [0, 1]
 
         df_res = df_ohlcv.loc[df_features.index].copy()
         df_res["Regime"] = regimes
@@ -85,3 +93,38 @@ class RegimeDetector:
         df_res["volatility"] = df_features["volatility"]
 
         return df_res
+
+    def regime_summary(self, df_result: pd.DataFrame) -> dict:
+        """
+        Descriptive statistics the fitted HMM already holds but does not return.
+
+        :param df_result: The DataFrame produced by fit_predict().
+        :return: Dict with the current regime, how many days it has run, and the
+            expected duration and annualised volatility of each regime.
+        """
+        regimes = df_result["Regime"].to_numpy()
+        current = int(regimes[-1])
+
+        # length of the run the series currently sits in
+        run_length = 1
+        while run_length < len(regimes) and regimes[-1 - run_length] == current:
+            run_length += 1
+
+        # The time spent in a state is geometric: staying with probability p_ii each
+        # step gives a mean run of 1 / (1 - p_ii). _state_order undoes the relabelling.
+        diagonal = np.diag(self.model.transmat_)[self._state_order]
+        expected = [
+            float(1.0 / (1.0 - p)) if p < 1.0 else float("inf") for p in diagonal
+        ]
+
+        log_return = np.log(df_result["Close"] / df_result["Close"].shift(1))
+        vols = [
+            float(log_return[regimes == i].std() * np.sqrt(252))
+            for i in range(self.n_regimes)
+        ]
+        return {
+            "current": current,
+            "run_length": run_length,
+            "expected_durations": expected,
+            "annualised_vols": vols,
+        }

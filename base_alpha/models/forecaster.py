@@ -7,6 +7,16 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 
+# Feature sets shared between the model and the dashboard's feature toggles.
+# MANDATORY_FEATURES always feed the meta-learner; OPTIONAL_FEATURES can be
+# switched off from the UI.
+MANDATORY_FEATURES = ["Regime", "Prob_LowVola", "Prob_HighVola"]
+OPTIONAL_FEATURES = ["RSI_14", "dist_sma_200", "MACD_12_26_9", "LSTM_Feature"]
+
+# Longest indicator window used in _prepare_indicators. Shorter inputs cannot
+# produce a single complete feature row.
+SMA_WINDOW = 200
+
 
 class LSTMModel(nn.Module):
     """
@@ -73,15 +83,8 @@ class Forecaster:
 
         # Utilities
         self.scaler = StandardScaler()
-        self.feature_cols_xgb = [
-            "Regime",
-            "Prob_LowVola",
-            "Prob_HighVola",
-            "RSI_14",
-            "MACD_12_26_9",
-            "dist_sma_200",
-            "LSTM_Feature",  # The prediction from Level 0
-        ]
+        # "LSTM_Feature" is the prediction from Level 0
+        self.feature_cols_xgb = MANDATORY_FEATURES + OPTIONAL_FEATURES
 
     def _prepare_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -99,7 +102,7 @@ class Forecaster:
         else:
             df["MACD_12_26_9"] = 0.0
 
-        sma_200 = ta.sma(df["Close"], length=200)
+        sma_200 = ta.sma(df["Close"], length=SMA_WINDOW)
         df["dist_sma_200"] = (df["Close"] - sma_200) / sma_200
 
         df["log_ret"] = np.log(df["Close"] / df["Close"].shift(1))
@@ -164,26 +167,40 @@ class Forecaster:
                 loss.backward()
                 optimizer.step()
 
-    def _get_lstm_features(self, df: pd.DataFrame) -> np.ndarray:
+    def _get_lstm_features(self, df: pd.DataFrame, batch_size: int = 1024) -> np.ndarray:
         """
         Generate LSTM predictions as features for XGBoost.
 
+        Every row from lookback_window onwards needs the prediction for the window
+        ending just before it. The windows are stacked and run in batches rather
+        than one forward pass per row.
+
         :param df: DataFrame containing historical data.
+        :param batch_size: Rows per forward pass; bounds memory on long histories.
         :return: Numpy array of LSTM predictions (one for each row).
         """
         raw_features = df[["Open", "High", "Low", "Close", "Volume"]].values
         scaled_features = self.scaler.transform(raw_features)
 
-        # We need a rolling window for every point
         lstm_preds = np.full(len(df), np.nan)
-        self.lstm_model.eval()
+        n_windows = len(df) - self.lookback_window
+        if n_windows <= 0:
+            return lstm_preds
 
+        # sliding_window_view yields (n_windows + 1, n_features, lookback); drop the
+        # trailing window, which would reach past the last row, and move the time
+        # axis back into the middle so the shape matches (batch, seq_len, features).
+        windows = np.lib.stride_tricks.sliding_window_view(
+            scaled_features, self.lookback_window, axis=0
+        )[:n_windows].transpose(0, 2, 1)
+
+        self.lstm_model.eval()
         with torch.no_grad():
-            for i in range(self.lookback_window, len(df)):
-                window = scaled_features[i - self.lookback_window : i]
-                window_tensor = torch.FloatTensor(window).unsqueeze(0)
-                pred = self.lstm_model(window_tensor)
-                lstm_preds[i] = pred.item()
+            for start in range(0, n_windows, batch_size):
+                batch = np.ascontiguousarray(windows[start : start + batch_size])
+                preds = self.lstm_model(torch.from_numpy(batch).float())
+                offset = self.lookback_window + start
+                lstm_preds[offset : offset + len(batch)] = preds.squeeze(-1).numpy()
 
         return lstm_preds
 
